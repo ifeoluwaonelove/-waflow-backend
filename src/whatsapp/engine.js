@@ -1,0 +1,409 @@
+'use strict';
+/**
+ * WAFlow WhatsApp Engine
+ * Built on @whiskeysockets/baileys
+ *
+ * Features:
+ *  - Multi-session (one per user)
+ *  - Auto-reconnect on disconnect
+ *  - QR regeneration
+ *  - Session persistence on disk
+ *  - Graceful error recovery (never crashes the server)
+ *  - Auto-save unknown contacts
+ *  - Auto-reply matching
+ *  - Deleted message recovery
+ *  - Referral code detection
+ */
+
+const {
+  default: makeWASocket,
+  useMultiFileAuthState,
+  DisconnectReason,
+  fetchLatestBaileysVersion,
+  isJidBroadcast,
+  isJidGroup,
+} = require('@whiskeysockets/baileys');
+const path = require('path');
+const fs = require('fs');
+const QRCode = require('qrcode');
+
+const User = require('../models/User');
+const Contact = require('../models/Contact');
+const { Message, AutoReply, ReferralParticipant, Contest } = require('../models');
+
+// ── State ─────────────────────────────────────────────────────────────────────
+const sessions = new Map();          // userId -> WASocket
+const reconnectTimers = new Map();   // userId -> timer
+const contactCounters = new Map();   // userId -> sequential number
+
+const SESSIONS_DIR = path.resolve(process.env.WA_SESSIONS_DIR || './sessions');
+if (!fs.existsSync(SESSIONS_DIR)) fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+const jidToPhone = (jid) =>
+  '+' + jid.replace(/@s\.whatsapp\.net|@c\.us/g, '');
+
+function sessionPath(userId) {
+  return path.join(SESSIONS_DIR, `user_${userId}`);
+}
+
+async function nextContactNum(userId) {
+  const n = (contactCounters.get(userId) || 0) + 1;
+  contactCounters.set(userId, n);
+  return String(n).padStart(3, '0');
+}
+
+function messageText(msg) {
+  return (
+    msg.message?.conversation ||
+    msg.message?.extendedTextMessage?.text ||
+    msg.message?.imageMessage?.caption ||
+    msg.message?.videoMessage?.caption ||
+    ''
+  );
+}
+
+// ── Auto-save contact ─────────────────────────────────────────────────────────
+async function autoSaveContact(userId, jid, pushName) {
+  const phone = jidToPhone(jid);
+  try {
+    let contact = await Contact.findOne({ userId, phone });
+    if (!contact) {
+      const num = await nextContactNum(userId);
+      contact = await Contact.create({
+        userId,
+        phone,
+        whatsappName: pushName || null,
+        generatedName: `Customer ${num}`,
+        displayName: pushName || `Customer ${num}`,
+        firstMessageAt: new Date(),
+      });
+    } else if (pushName && !contact.whatsappName) {
+      contact.whatsappName = pushName;
+      contact.displayName = contact.name || pushName || contact.generatedName;
+      await contact.save();
+    }
+    return contact;
+  } catch (err) {
+    console.error('[WA] autoSaveContact error:', err.message);
+    return null;
+  }
+}
+
+// ── Auto-reply ────────────────────────────────────────────────────────────────
+async function matchAutoReply(userId, text) {
+  if (!text) return null;
+  const lower = text.toLowerCase().trim();
+  try {
+    const rules = await AutoReply.find({ userId, status: 'active' }).sort({ priority: -1 });
+    for (const rule of rules) {
+      if (rule.timeRestriction !== 'always') {
+        const now = new Date();
+        const [sh, sm] = rule.businessHoursStart.split(':').map(Number);
+        const [eh, em] = rule.businessHoursEnd.split(':').map(Number);
+        const cur = now.getHours() * 60 + now.getMinutes();
+        const inBiz = cur >= sh * 60 + sm && cur <= eh * 60 + em;
+        if (rule.timeRestriction === 'business_hours' && !inBiz) continue;
+        if (rule.timeRestriction === 'off_hours' && inBiz) continue;
+      }
+      const matched = rule.keywords.some((kw) => {
+        switch (rule.matchType) {
+          case 'exact': return lower === kw;
+          case 'starts_with': return lower.startsWith(kw);
+          default: return lower.includes(kw);
+        }
+      });
+      if (matched) {
+        rule.triggerCount = (rule.triggerCount || 0) + 1;
+        await rule.save();
+        return rule;
+      }
+    }
+  } catch (err) {
+    console.error('[WA] matchAutoReply error:', err.message);
+  }
+  return null;
+}
+
+// ── Referral detection ────────────────────────────────────────────────────────
+async function detectReferral(userId, phone, text) {
+  if (!text) return;
+  const match = text.match(/REF[A-Z0-9]{3,10}/i);
+  if (!match) return;
+  const code = match[0].toUpperCase();
+  try {
+    const contest = await Contest.findOne({ userId, status: 'active' });
+    if (!contest) return;
+    const exists = await ReferralParticipant.findOne({ contestId: contest._id, phone });
+    if (exists) return;
+    const referrer = await ReferralParticipant.findOne({ contestId: contest._id, referralCode: code });
+    await ReferralParticipant.create({
+      contestId: contest._id,
+      userId,
+      phone,
+      name: phone,
+      referralCode: `REF${Date.now().toString(36).toUpperCase()}`,
+      referredBy: code,
+      referrerId: referrer?._id || null,
+    });
+    if (referrer) {
+      await ReferralParticipant.findByIdAndUpdate(referrer._id, { $inc: { totalReferrals: 1 } });
+    }
+  } catch (err) {
+    console.error('[WA] detectReferral error:', err.message);
+  }
+}
+
+// ── Core: create / restore a session ─────────────────────────────────────────
+async function createSession(userId, io, forceNew = false) {
+  // Clear any pending reconnect timer
+  if (reconnectTimers.has(userId)) {
+    clearTimeout(reconnectTimers.get(userId));
+    reconnectTimers.delete(userId);
+  }
+
+  // Close existing socket if force-new
+  if (forceNew && sessions.has(userId)) {
+    try { sessions.get(userId).end(); } catch (_) {}
+    sessions.delete(userId);
+  }
+
+  if (sessions.has(userId) && !forceNew) {
+    return sessions.get(userId);
+  }
+
+  const sPath = sessionPath(userId);
+  if (!fs.existsSync(sPath)) fs.mkdirSync(sPath, { recursive: true });
+
+  try {
+    const { state, saveCreds } = await useMultiFileAuthState(sPath);
+    const { version } = await fetchLatestBaileysVersion();
+
+    const sock = makeWASocket({
+      version,
+      auth: state,
+      printQRInTerminal: false,
+      browser: ['WAFlow', 'Chrome', '120.0.0.0'],
+      connectTimeoutMs: 30000,
+      keepAliveIntervalMs: 15000,
+      retryRequestDelayMs: 2000,
+      maxMsgRetryCount: 3,
+      getMessage: async () => ({ conversation: '' }),
+    });
+
+    sessions.set(userId, sock);
+
+    // ── Connection state updates ──────────────────────────────────────────────
+    sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
+      try {
+        if (qr) {
+          const qrDataUrl = await QRCode.toDataURL(qr, { width: 256 });
+          io.to(`user-${userId}`).emit('whatsapp:qr', { qr: qrDataUrl });
+        }
+
+        if (connection === 'open') {
+          const phone = sock.user?.id ? jidToPhone(sock.user.id) : null;
+          await User.findByIdAndUpdate(userId, {
+            whatsappConnected: true,
+            whatsappPhone: phone,
+            whatsappSessionPath: sPath,
+          });
+          io.to(`user-${userId}`).emit('whatsapp:connected', { phone });
+          console.log(`[WA] User ${userId} connected — ${phone}`);
+        }
+
+        if (connection === 'close') {
+          sessions.delete(userId);
+          const code = lastDisconnect?.error?.output?.statusCode;
+          const loggedOut = code === DisconnectReason.loggedOut;
+
+          if (loggedOut) {
+            // Full logout — clean files and update DB
+            await User.findByIdAndUpdate(userId, { whatsappConnected: false, whatsappPhone: null });
+            io.to(`user-${userId}`).emit('whatsapp:disconnected', { reason: 'logged_out' });
+            try { fs.rmSync(sPath, { recursive: true }); } catch (_) {}
+            console.log(`[WA] User ${userId} logged out`);
+          } else {
+            // Network error — schedule reconnect
+            io.to(`user-${userId}`).emit('whatsapp:reconnecting', {});
+            console.log(`[WA] User ${userId} disconnected (code ${code}) — reconnecting in 5s`);
+            const timer = setTimeout(() => createSession(userId, io), 5000);
+            reconnectTimers.set(userId, timer);
+          }
+        }
+      } catch (err) {
+        console.error('[WA] connection.update handler error:', err.message);
+      }
+    });
+
+    sock.ev.on('creds.update', saveCreds);
+
+    // ── Incoming messages ─────────────────────────────────────────────────────
+    sock.ev.on('messages.upsert', async ({ messages: msgs, type }) => {
+      if (type !== 'notify') return;
+
+      for (const msg of msgs) {
+        try {
+          const jid = msg.key.remoteJid;
+          if (!jid || isJidBroadcast(jid) || isJidGroup(jid)) continue;
+          if (msg.key.fromMe) continue;
+
+          const text = messageText(msg);
+          const phone = jidToPhone(jid);
+
+          // 1. Auto-save contact
+          const contact = await autoSaveContact(userId, jid, msg.pushName);
+          if (!contact) continue;
+
+          // 2. Log inbound message
+          await Message.create({
+            userId,
+            contactId: contact._id,
+            phone,
+            direction: 'inbound',
+            body: text || '[media]',
+            type: Object.keys(msg.message || {})[0]?.replace('Message', '') || 'text',
+            whatsappMessageId: msg.key.id,
+            timestamp: new Date((msg.messageTimestamp || Date.now() / 1000) * 1000),
+            status: 'received',
+          });
+
+          await Contact.findByIdAndUpdate(contact._id, {
+            $inc: { totalMessages: 1 },
+            lastMessageAt: new Date(),
+          });
+
+          // 3. Status viewer DONE confirmation
+          if (text.trim().toUpperCase() === 'DONE') {
+            await Contact.findByIdAndUpdate(contact._id, { isStatusViewer: true, savedNumber: true });
+          }
+
+          // 4. Referral detection
+          await detectReferral(userId, phone, text);
+
+          // 5. Auto-reply
+          const rule = await matchAutoReply(userId, text);
+          if (rule) {
+            setTimeout(async () => {
+              try {
+                await sock.sendMessage(jid, { text: rule.reply });
+                await Message.create({
+                  userId,
+                  contactId: contact._id,
+                  phone,
+                  direction: 'outbound',
+                  body: rule.reply,
+                  autoReplyId: rule._id,
+                  status: 'sent',
+                  timestamp: new Date(),
+                });
+              } catch (e) {
+                console.error('[WA] Auto-reply send error:', e.message);
+              }
+            }, rule.delayMs || 1500);
+          }
+
+          // 6. Emit real-time event
+          io.to(`user-${userId}`).emit('whatsapp:message', {
+            contact: { id: contact._id, name: contact.displayName, phone },
+            message: { text, timestamp: Date.now() },
+          });
+        } catch (err) {
+          console.error('[WA] Message processing error:', err.message);
+        }
+      }
+    });
+
+    // ── Deleted message recovery ──────────────────────────────────────────────
+    sock.ev.on('messages.update', async (updates) => {
+      for (const update of updates) {
+        try {
+          if (update.update?.messageStubType !== 1) continue;
+          const existing = await Message.findOne({ userId, whatsappMessageId: update.key.id });
+          if (existing?.body && !existing.isDeleted) {
+            existing.isDeleted = true;
+            existing.deletedBody = existing.body;
+            await existing.save();
+            io.to(`user-${userId}`).emit('whatsapp:message_deleted', {
+              messageId: update.key.id,
+              recoveredText: existing.deletedBody,
+              phone: jidToPhone(update.key.remoteJid),
+            });
+          }
+        } catch (err) {
+          console.error('[WA] Deleted message recovery error:', err.message);
+        }
+      }
+    });
+
+    return sock;
+  } catch (err) {
+    console.error(`[WA] createSession error for user ${userId}:`, err.message);
+    // Schedule retry
+    const timer = setTimeout(() => createSession(userId, io), 8000);
+    reconnectTimers.set(userId, timer);
+  }
+}
+
+// ── Send message ──────────────────────────────────────────────────────────────
+async function sendMessage(userId, phone, text, media, mediaType) {
+  const sock = sessions.get(userId);
+  if (!sock) throw new Error('WhatsApp not connected for this account');
+
+  const jid = phone.replace('+', '') + '@s.whatsapp.net';
+
+  if (media && mediaType) {
+    return sock.sendMessage(jid, { [mediaType]: media, caption: text });
+  }
+  return sock.sendMessage(jid, { text });
+}
+
+// ── Disconnect ────────────────────────────────────────────────────────────────
+async function disconnectSession(userId) {
+  if (reconnectTimers.has(userId)) {
+    clearTimeout(reconnectTimers.get(userId));
+    reconnectTimers.delete(userId);
+  }
+  const sock = sessions.get(userId);
+  if (sock) {
+    try { await sock.logout(); } catch (_) {}
+    sessions.delete(userId);
+  }
+  const sPath = sessionPath(userId);
+  if (fs.existsSync(sPath)) {
+    try { fs.rmSync(sPath, { recursive: true }); } catch (_) {}
+  }
+  await User.findByIdAndUpdate(userId, {
+    whatsappConnected: false,
+    whatsappPhone: null,
+    whatsappSessionPath: null,
+  });
+}
+
+// ── Init: restore all connected users on boot ─────────────────────────────────
+async function initWhatsApp(io) {
+  let users = [];
+  try {
+    users = await User.find({ whatsappConnected: true }).lean();
+  } catch (err) {
+    console.error('[WA] initWhatsApp DB query error:', err.message);
+    return;
+  }
+
+  console.log(`[WA] Restoring ${users.length} session(s)...`);
+  for (const user of users) {
+    const sPath = sessionPath(user._id.toString());
+    if (fs.existsSync(sPath)) {
+      createSession(user._id.toString(), io).catch((err) => {
+        console.error(`[WA] Failed to restore session for ${user._id}:`, err.message);
+      });
+      // Stagger reconnects to avoid hammering WA servers
+      await new Promise((r) => setTimeout(r, 1500));
+    } else {
+      // Session files gone (e.g. Render disk reset) — mark as disconnected
+      await User.findByIdAndUpdate(user._id, { whatsappConnected: false, whatsappPhone: null });
+    }
+  }
+}
+
+module.exports = { createSession, disconnectSession, sendMessage, initWhatsApp, sessions };
