@@ -151,6 +151,119 @@ const referralSchema = new mongoose.Schema({
 
 referralSchema.index({ contestId: 1, totalReferrals: -1 });
 
+// ── Schedule (Status / Channel / Group scheduler) ─────────────────────────────
+const scheduleSchema = new mongoose.Schema({
+  userId:       { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  type:         { type: String, enum: ['status', 'channel', 'group', 'contact'], required: true },
+  title:        { type: String, trim: true },
+  content:      { type: String },                 // text body
+  mediaUrl:     { type: String },                 // stored file path or URL
+  mediaType:    { type: String, enum: ['image', 'video', 'document', null], default: null },
+  // targets
+  targetGroups:   [{ jid: String, name: String }],  // for group scheduler
+  targetChannels: [{ jid: String, name: String }],  // for channel scheduler
+  targetContacts: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Contact' }],
+  // timing
+  scheduledAt:  { type: Date, required: true, index: true },
+  timezone:     { type: String, default: 'Africa/Lagos' },
+  // execution
+  status:       { type: String, enum: ['pending', 'sent', 'failed', 'cancelled'], default: 'pending' },
+  sentAt:       Date,
+  errorMessage: String,
+  retryCount:   { type: Number, default: 0 },
+}, { timestamps: true });
+
+scheduleSchema.index({ userId: 1, scheduledAt: 1, status: 1 });
+
+// ── Invoice ───────────────────────────────────────────────────────────────────
+const invoiceSchema = new mongoose.Schema({
+  userId:        { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  invoiceNumber: { type: String, required: true },   // INV-0001
+  clientName:    { type: String, required: true, trim: true },
+  clientPhone:   { type: String, trim: true },
+  clientEmail:   { type: String, trim: true },
+  items: [{
+    description: { type: String, required: true },
+    quantity:    { type: Number, default: 1 },
+    unitPrice:   { type: Number, required: true },
+    total:       { type: Number },
+  }],
+  subtotal:     { type: Number, default: 0 },
+  tax:          { type: Number, default: 0 },
+  discount:     { type: Number, default: 0 },
+  total:        { type: Number, required: true },
+  currency:     { type: String, default: '₦' },
+  status:       { type: String, enum: ['draft', 'sent', 'paid', 'overdue', 'cancelled'], default: 'draft' },
+  dueDate:      Date,
+  paidAt:       Date,
+  notes:        String,
+}, { timestamps: true });
+
+invoiceSchema.index({ userId: 1, invoiceNumber: 1 }, { unique: true });
+
+// ── Receipt ───────────────────────────────────────────────────────────────────
+const receiptSchema = new mongoose.Schema({
+  userId:        { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  invoiceId:     { type: mongoose.Schema.Types.ObjectId, ref: 'Invoice' },
+  receiptNumber: { type: String, required: true },   // REC-0001
+  clientName:    { type: String, required: true, trim: true },
+  clientPhone:   { type: String, trim: true },
+  items: [{
+    description: String,
+    quantity:    Number,
+    unitPrice:   Number,
+    total:       Number,
+  }],
+  total:         { type: Number, required: true },
+  currency:      { type: String, default: '₦' },
+  paymentMethod: { type: String, default: 'Bank Transfer' },
+  notes:         String,
+}, { timestamps: true });
+
+receiptSchema.index({ userId: 1, receiptNumber: 1 }, { unique: true });
+
+// ── Transaction (Money Management) ───────────────────────────────────────────
+const transactionSchema = new mongoose.Schema({
+  userId:      { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  type:        { type: String, enum: ['income', 'expense'], required: true },
+  amount:      { type: Number, required: true, min: 0 },
+  description: { type: String, required: true, trim: true },
+  category:    { type: String, trim: true },
+  date:        { type: Date, default: Date.now },
+  invoiceId:   { type: mongoose.Schema.Types.ObjectId, ref: 'Invoice' },
+  reference:   String,
+}, { timestamps: true });
+
+transactionSchema.index({ userId: 1, date: -1 });
+transactionSchema.index({ userId: 1, type: 1 });
+
+// ── UserSettings (auto-save, welcome msg, etc.) ───────────────────────────────
+const userSettingsSchema = new mongoose.Schema({
+  userId:            { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, unique: true },
+  autoSaveContacts:  { type: Boolean, default: true },
+  autoSavePrefix:    { type: String, default: 'Customer' },
+  welcomeMessage:    { type: String, default: 'Hello 👋\n\nWelcome! How can we help you today?' },
+  sendWelcome:       { type: Boolean, default: true },
+  welcomeDelayMs:    { type: Number, default: 1000 },
+  groupSyncEnabled:  { type: Boolean, default: true },
+}, { timestamps: true });
+
+// ── Extend Contact with new fields (no migration needed — new fields just appear) ──
+// source, firstContactDate already partially handled; we'll rely on existing schema
+// and add source via update.
+
+// ── GroupMember (for extractor) ───────────────────────────────────────────────
+const groupMemberSchema = new mongoose.Schema({
+  userId:    { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  groupJid:  { type: String, required: true },
+  groupName: { type: String },
+  phone:     { type: String, required: true },
+  name:      { type: String },
+  extractedAt: { type: Date, default: Date.now },
+}, { timestamps: true });
+
+groupMemberSchema.index({ userId: 1, groupJid: 1, phone: 1 }, { unique: true });
+
 module.exports = {
   User:                mongoose.model('User', userSchema),
   Contact:             mongoose.model('Contact', contactSchema),
@@ -159,4 +272,10 @@ module.exports = {
   Message:             mongoose.model('Message', messageSchema),
   Contest:             mongoose.model('Contest', contestSchema),
   ReferralParticipant: mongoose.model('ReferralParticipant', referralSchema),
+  Schedule:            mongoose.model('Schedule', scheduleSchema),
+  Invoice:             mongoose.model('Invoice', invoiceSchema),
+  Receipt:             mongoose.model('Receipt', receiptSchema),
+  Transaction:         mongoose.model('Transaction', transactionSchema),
+  UserSettings:        mongoose.model('UserSettings', userSettingsSchema),
+  GroupMember:         mongoose.model('GroupMember', groupMemberSchema),
 };

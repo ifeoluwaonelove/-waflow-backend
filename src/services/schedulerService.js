@@ -65,16 +65,91 @@ async function executeBroadcast(broadcast) {
   }
 }
 
+// ── Execute a Schedule item (status/channel/group/contact) ────────────────────
+async function executeSchedule(schedule) {
+  const { Schedule } = require('../models');
+  try {
+    const sock = sessions.get(schedule.userId.toString());
+    if (!sock) throw new Error('WhatsApp not connected');
+
+    const msgPayload = schedule.mediaUrl
+      ? { [schedule.mediaType || 'image']: { url: schedule.mediaUrl }, caption: schedule.content || '' }
+      : { text: schedule.content };
+
+    switch (schedule.type) {
+      case 'status': {
+        // Send to WA status (broadcast list)
+        await sock.sendMessage('status@broadcast', msgPayload);
+        break;
+      }
+      case 'channel':
+      case 'group': {
+        const targets = schedule.type === 'channel' ? schedule.targetChannels : schedule.targetGroups;
+        for (const t of targets || []) {
+          try {
+            await sock.sendMessage(t.jid, msgPayload);
+            await new Promise(r => setTimeout(r, 1500));
+          } catch (e) {
+            console.error(`[Scheduler] Failed to send to ${t.jid}:`, e.message);
+          }
+        }
+        break;
+      }
+      case 'contact': {
+        const { Contact } = require('../models');
+        for (const cId of schedule.targetContacts || []) {
+          try {
+            const contact = await Contact.findById(cId);
+            if (!contact) continue;
+            const jid = contact.phone.replace('+', '') + '@s.whatsapp.net';
+            await sock.sendMessage(jid, msgPayload);
+            await new Promise(r => setTimeout(r, 1500));
+          } catch (e) {
+            console.error(`[Scheduler] Contact send error:`, e.message);
+          }
+        }
+        break;
+      }
+    }
+
+    schedule.status = 'sent';
+    schedule.sentAt = new Date();
+    await schedule.save();
+    console.log(`[Scheduler] Schedule ${schedule._id} (${schedule.type}) executed`);
+  } catch (err) {
+    schedule.retryCount = (schedule.retryCount || 0) + 1;
+    if (schedule.retryCount >= 3) {
+      schedule.status = 'failed';
+      schedule.errorMessage = err.message;
+    }
+    await schedule.save();
+    console.error(`[Scheduler] Schedule ${schedule._id} failed:`, err.message);
+  }
+}
+
 function startScheduler() {
   cron.schedule('* * * * *', async () => {
     try {
-      const due = await Broadcast.find({ status: 'scheduled', scheduledAt: { $lte: new Date() } });
-      for (const b of due) executeBroadcast(b).catch(console.error);
+      const now = new Date();
+
+      // Broadcasts
+      const dueBroadcasts = await Broadcast.find({ status: 'scheduled', scheduledAt: { $lte: now } });
+      for (const b of dueBroadcasts) executeBroadcast(b).catch(console.error);
+
+      // Schedules (status/channel/group/contact)
+      const { Schedule } = require('../models');
+      const dueSchedules = await Schedule.find({
+        status: 'pending',
+        scheduledAt: { $lte: now },
+        retryCount: { $lt: 3 },
+      });
+      for (const s of dueSchedules) executeSchedule(s).catch(console.error);
+
     } catch (err) {
       console.error('[Scheduler] Cron error:', err.message);
     }
   });
-  console.log('[Scheduler] Started');
+  console.log('[Scheduler] Started (broadcasts + schedules)');
 }
 
-module.exports = { startScheduler, executeBroadcast };
+module.exports = { startScheduler, executeBroadcast, executeSchedule };

@@ -90,6 +90,12 @@ app.use('/api/auto-reply', require('./src/routes/autoReply'));
 app.use('/api/referral',   require('./src/routes/referral'));
 app.use('/api/analytics',  require('./src/routes/analytics'));
 app.use('/api/webhook',    require('./src/routes/webhook'));
+// ── New feature routes ────────────────────────────────────────────────────────
+app.use('/api/schedule',   require('./src/routes/schedule'));
+app.use('/api/invoices',   require('./src/routes/invoices'));
+app.use('/api/finance',    require('./src/routes/finance'));
+app.use('/api/groups',     require('./src/routes/groups'));
+app.use('/api/settings',   require('./src/routes/settings'));
 
 // ── 404 ───────────────────────────────────────────────────────────────────────
 app.use((req, res) => {

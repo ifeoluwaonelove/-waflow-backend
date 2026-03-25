@@ -63,24 +63,47 @@ function messageText(msg) {
   );
 }
 
+// ── Get or create user settings (cached per session) ─────────────────────────
+const settingsCache = new Map(); // userId -> settings
+
+async function getUserSettings(userId) {
+  if (settingsCache.has(userId)) return settingsCache.get(userId);
+  try {
+    const { UserSettings } = require('../models');
+    let s = await UserSettings.findOne({ userId });
+    if (!s) s = await UserSettings.create({ userId });
+    settingsCache.set(userId, s);
+    // Invalidate cache after 60s so live changes take effect
+    setTimeout(() => settingsCache.delete(userId), 60000);
+    return s;
+  } catch (e) {
+    return { autoSaveContacts: true, autoSavePrefix: 'Customer', sendWelcome: true, welcomeMessage: 'Hello 👋\n\nWelcome! How can we help you today?', welcomeDelayMs: 1000 };
+  }
+}
+
 // ── Auto-save contact ─────────────────────────────────────────────────────────
 async function autoSaveContact(userId, jid, pushName) {
-  const phone = jidToPhone(jid);
+  const phone    = jidToPhone(jid);
+  const settings = await getUserSettings(userId);
+
   try {
     let contact = await Contact.findOne({ userId, phone });
     if (!contact) {
-      const num = await nextContactNum(userId);
+      if (!settings.autoSaveContacts) return null; // auto-save disabled
+
+      const num  = await nextContactNum(userId);
+      const prefix = settings.autoSavePrefix || 'Customer';
       contact = await Contact.create({
         userId,
         phone,
-        whatsappName: pushName || null,
-        generatedName: `Customer ${num}`,
-        displayName: pushName || `Customer ${num}`,
+        whatsappName:   pushName || null,
+        generatedName:  `${prefix} ${num}`,
+        displayName:    pushName || `${prefix} ${num}`,
         firstMessageAt: new Date(),
       });
     } else if (pushName && !contact.whatsappName) {
       contact.whatsappName = pushName;
-      contact.displayName = contact.name || pushName || contact.generatedName;
+      contact.displayName  = contact.name || pushName || contact.generatedName;
       await contact.save();
     }
     return contact;
@@ -255,6 +278,8 @@ async function createSession(userId, io, forceNew = false) {
           const contact = await autoSaveContact(userId, jid, msg.pushName);
           if (!contact) continue;
 
+          const isNewContact = contact.totalMessages === 0;
+
           // 2. Log inbound message
           await Message.create({
             userId,
@@ -301,6 +326,23 @@ async function createSession(userId, io, forceNew = false) {
                 console.error('[WA] Auto-reply send error:', e.message);
               }
             }, rule.delayMs || 1500);
+          } else if (isNewContact) {
+            // No keyword match but first message — send welcome if configured
+            const settings = await getUserSettings(userId);
+            if (settings.sendWelcome && settings.welcomeMessage) {
+              setTimeout(async () => {
+                try {
+                  await sock.sendMessage(jid, { text: settings.welcomeMessage });
+                  await Message.create({
+                    userId, contactId: contact._id, phone,
+                    direction: 'outbound', body: settings.welcomeMessage,
+                    status: 'sent', timestamp: new Date(),
+                  });
+                } catch (e) {
+                  console.error('[WA] Welcome send error:', e.message);
+                }
+              }, settings.welcomeDelayMs || 1000);
+            }
           }
 
           // 6. Emit real-time event
