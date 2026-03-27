@@ -1,2 +1,3 @@
 const mongoose = require('mongoose');
-module.exports = mongoose.models.Contact || mongoose.model('Contact');
+const models = require('./index');
+module.exports = models.Contact;

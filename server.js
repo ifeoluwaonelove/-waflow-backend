@@ -11,6 +11,8 @@ const rateLimit = require('express-rate-limit');
 const mongoSanitize = require('express-mongo-sanitize');
 const fs = require('fs');
 const path = require('path');
+// Force all models to register before any other service starts
+require('./src/models/index'); 
 
 const connectDB = require('./src/config/database');
 const { initWhatsApp } = require('./src/whatsapp/engine');
