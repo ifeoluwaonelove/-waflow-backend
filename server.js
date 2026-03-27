@@ -15,7 +15,7 @@ const path = require('path');
 require('./src/models/index'); 
 
 const connectDB = require('./src/config/database');
-const { initWhatsApp } = require('./src/whatsapp/engine');
+const { createSession } = require('./src/whatsapp/engine');
 const { startScheduler } = require('./src/services/schedulerService');
 const { formatResponse } = require('./src/utils/response');
 
@@ -133,8 +133,18 @@ async function start() {
   try {
     await connectDB();
 
-    // Restore WhatsApp sessions for all connected users
-    await initWhatsApp(io);
+    // Restore WhatsApp sessions only for users who were previously connected
+    const { User } = require('./src/models');
+    const connectedUsers = await User.find({ whatsappConnected: true });
+    console.log(`[WA] Restoring ${connectedUsers.length} sessions...`);
+    
+    for (const user of connectedUsers) {
+      try {
+        await createSession(user._id.toString(), io);
+      } catch (err) {
+        console.error(`[WA] Failed to restore session for ${user.email}:`, err.message);
+      }
+    }
 
     // Cron scheduler for broadcasts
     startScheduler();
