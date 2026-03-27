@@ -43,7 +43,7 @@ const broadcastSchema = new mongoose.Schema({
   sentCount: { type: Number, default: 0 }
 }, { timestamps: true });
 
-// 4. CONTEST SCHEMA (REFERRAL SYSTEM)
+// 4. CONTEST / REFERRAL SCHEMA
 const contestSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   name: { type: String, required: true },
@@ -51,7 +51,6 @@ const contestSchema = new mongoose.Schema({
   status: { type: String, enum: ['active', 'ended'], default: 'active' }
 }, { timestamps: true });
 
-// 5. CONTEST PARTICIPANT SCHEMA (Fixes Referral error)
 const contestParticipantSchema = new mongoose.Schema({
   contestId: { type: mongoose.Schema.Types.ObjectId, ref: 'Contest', required: true },
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
@@ -61,26 +60,24 @@ const contestParticipantSchema = new mongoose.Schema({
   totalEarned: { type: Number, default: 0 }
 }, { timestamps: true });
 
-// 6. SCHEDULER SCHEMA (Fixes Scheduler error)
+// 5. SCHEDULER SCHEMA
 const scheduleSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   target: { type: String, required: true },
   content: { type: String, required: true },
   scheduledAt: { type: Date, required: true },
-  status: { type: String, enum: ['pending', 'sent', 'failed'], default: 'pending' },
-  mediaType: { type: String, default: 'text' }
+  status: { type: String, enum: ['pending', 'sent', 'failed'], default: 'pending' }
 }, { timestamps: true });
 
-// 7. INVOICE SCHEMA (Fixes Invoice error)
+// 6. INVOICE SCHEMA
 const invoiceSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   clientName: { type: String, required: true },
-  clientPhone: { type: String },
   amount: { type: Number, required: true },
-  status: { type: String, enum: ['unpaid', 'paid', 'cancelled'], default: 'unpaid' }
+  status: { type: String, default: 'unpaid' }
 }, { timestamps: true });
 
-// 8. TRANSACTION SCHEMA (FINANCE)
+// 7. TRANSACTION SCHEMA (FINANCE)
 const transactionSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   type: { type: String, enum: ['income', 'expense'], required: true },
@@ -88,7 +85,7 @@ const transactionSchema = new mongoose.Schema({
   description: { type: String }
 }, { timestamps: true });
 
-// 9. AUTO-REPLY SCHEMA
+// 8. AUTO-REPLY & MESSAGE
 const autoReplySchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   keywords: [String],
@@ -96,34 +93,41 @@ const autoReplySchema = new mongoose.Schema({
   status: { type: String, default: 'active' }
 }, { timestamps: true });
 
-// 10. MESSAGE SCHEMA
 const messageSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   body: String,
   type: { type: String, enum: ['inbound', 'outbound'] }
 }, { timestamps: true });
 
-// RESET AND REGISTER
-if (mongoose.models.User) delete mongoose.models.User;
-if (mongoose.models.Contact) delete mongoose.models.Contact;
-if (mongoose.models.Broadcast) delete mongoose.models.Broadcast;
-if (mongoose.models.Contest) delete mongoose.models.Contest;
-if (mongoose.models.ContestParticipant) delete mongoose.models.ContestParticipant;
-if (mongoose.models.Schedule) delete mongoose.models.Schedule;
-if (mongoose.models.Invoice) delete mongoose.models.Invoice;
-if (mongoose.models.Transaction) delete mongoose.models.Transaction;
-if (mongoose.models.AutoReply) delete mongoose.models.AutoReply;
-if (mongoose.models.Message) delete mongoose.models.Message;
+// CLEANUP AND REGISTER
+const m = mongoose.models;
+if (m.User) delete m.User;
+if (m.Contact) delete m.Contact;
+if (m.Broadcast) delete m.Broadcast;
+if (m.Contest) delete m.Contest;
+if (m.ContestParticipant) delete m.ContestParticipant;
+if (m.ReferralParticipant) delete m.ReferralParticipant;
+if (m.Schedule) delete m.Schedule;
+if (m.Invoice) delete m.Invoice;
+if (m.Transaction) delete m.Transaction;
+if (m.AutoReply) delete m.AutoReply;
+if (m.Message) delete m.Message;
 
 const User = mongoose.model('User', userSchema);
 const Contact = mongoose.model('Contact', contactSchema);
 const Broadcast = mongoose.model('Broadcast', broadcastSchema);
 const Contest = mongoose.model('Contest', contestSchema);
 const ContestParticipant = mongoose.model('ContestParticipant', contestParticipantSchema);
+// ALIAS for old Referral code:
+const ReferralParticipant = mongoose.model('ReferralParticipant', contestParticipantSchema);
 const Schedule = mongoose.model('Schedule', scheduleSchema);
 const Invoice = mongoose.model('Invoice', invoiceSchema);
 const Transaction = mongoose.model('Transaction', transactionSchema);
 const AutoReply = mongoose.model('AutoReply', autoReplySchema);
 const Message = mongoose.model('Message', messageSchema);
 
-module.exports = { User, Contact, Broadcast, Contest, ContestParticipant, Schedule, Invoice, Transaction, AutoReply, Message };
+module.exports = { 
+  User, Contact, Broadcast, Contest, 
+  ContestParticipant, ReferralParticipant, 
+  Schedule, Invoice, Transaction, AutoReply, Message 
+};
