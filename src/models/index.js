@@ -11,6 +11,21 @@ const userSchema = new mongoose.Schema({
   referralCode: { type: String, unique: true, sparse: true },
   totalEarnings: { type: Number, default: 0 }
 }, { timestamps: true });
+// Password comparison method (Required for Login)
+userSchema.methods.comparePassword = async function(candidatePassword) {
+  const bcrypt = require('bcryptjs');
+  return bcrypt.compare(candidatePassword, this.password);
+};
+
+// Password hashing middleware (Required for Register/Change Password)
+userSchema.pre('save', async function(next) {
+  if (!this.isModified('password')) return next();
+  const bcrypt = require('bcryptjs');
+  const salt = await bcrypt.genSalt(10);
+  this.password = await bcrypt.hash(this.password, salt);
+  next();
+});
+
 
 // 2. CONTACT SCHEMA
 const contactSchema = new mongoose.Schema({
@@ -38,10 +53,16 @@ const contestSchema = new mongoose.Schema({
   status: { type: String, enum: ['active', 'ended'], default: 'active' }
 }, { timestamps: true });
 
-// EXPORT ALL MODELS
-const User = mongoose.models.User || mongoose.model('User', userSchema);
-const Contact = mongoose.models.Contact || mongoose.model('Contact', contactSchema);
-const Broadcast = mongoose.models.Broadcast || mongoose.model('Broadcast', broadcastSchema);
-const Contest = mongoose.models.Contest || mongoose.model('Contest', contestSchema);
+// FORCE RESET MODELS (To fix "comparePassword is not a function")
+if (mongoose.models.User) delete mongoose.models.User;
+if (mongoose.models.Contact) delete mongoose.models.Contact;
+if (mongoose.models.Broadcast) delete mongoose.models.Broadcast;
+if (mongoose.models.Contest) delete mongoose.models.Contest;
+
+const User = mongoose.model('User', userSchema);
+const Contact = mongoose.model('Contact', contactSchema);
+const Broadcast = mongoose.model('Broadcast', broadcastSchema);
+const Contest = mongoose.model('Contest', contestSchema);
 
 module.exports = { User, Contact, Broadcast, Contest };
+
