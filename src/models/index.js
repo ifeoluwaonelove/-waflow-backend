@@ -5,12 +5,14 @@ const userSchema = new mongoose.Schema({
   email: { type: String, required: true, unique: true },
   password: { type: String, required: true },
   role: { type: String, enum: ['user', 'admin'], default: 'user' },
+  isActive: { type: Boolean, default: true },
   whatsappConnected: { type: Boolean, default: false },
   whatsappNumber: { type: String },
   whatsappName: { type: String },
   referralCode: { type: String, unique: true, sparse: true },
   totalEarnings: { type: Number, default: 0 }
 }, { timestamps: true });
+
 // Password comparison method (Required for Login)
 userSchema.methods.comparePassword = async function(candidatePassword) {
   const bcrypt = require('bcryptjs');
@@ -26,7 +28,6 @@ userSchema.pre('save', async function(next) {
   next();
 });
 
-
 // 2. CONTACT SCHEMA
 const contactSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
@@ -35,7 +36,7 @@ const contactSchema = new mongoose.Schema({
   group: { type: String, default: 'Leads' }
 }, { timestamps: true });
 
-// 3. BROADCAST SCHEMA (ONLY ONCE)
+// 3. BROADCAST SCHEMA
 const broadcastSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   name: { type: String, required: true },
@@ -53,7 +54,7 @@ const contestSchema = new mongoose.Schema({
   status: { type: String, enum: ['active', 'ended'], default: 'active' }
 }, { timestamps: true });
 
-// FORCE RESET MODELS (To fix "comparePassword is not a function")
+// FORCE RESET MODELS
 if (mongoose.models.User) delete mongoose.models.User;
 if (mongoose.models.Contact) delete mongoose.models.Contact;
 if (mongoose.models.Broadcast) delete mongoose.models.Broadcast;
@@ -65,4 +66,3 @@ const Broadcast = mongoose.model('Broadcast', broadcastSchema);
 const Contest = mongoose.model('Contest', contestSchema);
 
 module.exports = { User, Contact, Broadcast, Contest };
-
