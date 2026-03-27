@@ -26,7 +26,20 @@ async function nextReceiptNumber(userId) {
 
 // ── Routes ───────────────────────────────────────────────────────────────────
 
-// GET all invoices
+// 1. GET ALL RECEIPTS (Fixed: Now correctly defined and exported)
+router.get('/receipts', protect, async (req, res, next) => {
+  try {
+    const { page = 1, limit = 20 } = req.query;
+    const total = await Receipt.countDocuments({ userId: req.user._id });
+    const receipts = await Receipt.find({ userId: req.user._id })
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(parseInt(limit));
+    res.json(paginate(receipts, total, page, limit));
+  } catch (err) { next(err); }
+});
+
+// 2. GET ALL INVOICES
 router.get('/', protect, async (req, res, next) => {
   try {
     const { status, page = 1, limit = 20 } = req.query;
@@ -41,7 +54,7 @@ router.get('/', protect, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// POST new invoice
+// 3. POST NEW INVOICE
 router.post('/', protect, async (req, res, next) => {
   try {
     const { clientName, total, status } = req.body;
