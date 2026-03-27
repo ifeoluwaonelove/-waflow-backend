@@ -30,6 +30,8 @@ const QRCode = require('qrcode');
 const User = require('../models/User');
 const Contact = require('../models/Contact');
 const { Message, AutoReply, ReferralParticipant, Contest } = require('../models');
+const { handleReferralCommand } = require('../services/referralCommandHandler');
+const { handleContestCommand }  = require('../services/contestCommandHandler');
 
 // ── State ─────────────────────────────────────────────────────────────────────
 const sessions = new Map();          // userId -> WASocket
@@ -303,45 +305,80 @@ async function createSession(userId, io, forceNew = false) {
             await Contact.findByIdAndUpdate(contact._id, { isStatusViewer: true, savedNumber: true });
           }
 
-          // 4. Referral detection
-          await detectReferral(userId, phone, text);
-
-          // 5. Auto-reply
-          const rule = await matchAutoReply(userId, text);
-          if (rule) {
-            setTimeout(async () => {
-              try {
-                await sock.sendMessage(jid, { text: rule.reply });
-                await Message.create({
-                  userId,
-                  contactId: contact._id,
-                  phone,
-                  direction: 'outbound',
-                  body: rule.reply,
-                  autoReplyId: rule._id,
-                  status: 'sent',
-                  timestamp: new Date(),
-                });
-              } catch (e) {
-                console.error('[WA] Auto-reply send error:', e.message);
-              }
-            }, rule.delayMs || 1500);
-          } else if (isNewContact) {
-            // No keyword match but first message — send welcome if configured
-            const settings = await getUserSettings(userId);
-            if (settings.sendWelcome && settings.welcomeMessage) {
+          // 4. Referral command handler (affiliate system)
+          const refResult = await handleReferralCommand(userId, phone, text, msg.pushName, sock, jid);
+          if (refResult.handled) {
+            if (refResult.reply) {
               setTimeout(async () => {
                 try {
-                  await sock.sendMessage(jid, { text: settings.welcomeMessage });
+                  await sock.sendMessage(jid, { text: refResult.reply });
                   await Message.create({
                     userId, contactId: contact._id, phone,
-                    direction: 'outbound', body: settings.welcomeMessage,
+                    direction: 'outbound', body: refResult.reply,
                     status: 'sent', timestamp: new Date(),
                   });
                 } catch (e) {
-                  console.error('[WA] Welcome send error:', e.message);
+                  console.error('[WA] Referral reply send error:', e.message);
                 }
-              }, settings.welcomeDelayMs || 1000);
+              }, 800);
+            }
+            // Skip auto-reply and welcome for referral commands
+          } else {
+            // 4b. Contest command handler (leaderboard / per-referral contests)
+            const contestResult = await handleContestCommand(userId, phone, text, msg.pushName, sock, jid);
+            if (contestResult.handled) {
+              if (contestResult.reply) {
+                setTimeout(async () => {
+                  try {
+                    await sock.sendMessage(jid, { text: contestResult.reply });
+                    await Message.create({
+                      userId, contactId: contact._id, phone,
+                      direction: 'outbound', body: contestResult.reply,
+                      status: 'sent', timestamp: new Date(),
+                    });
+                  } catch (e) {
+                    console.error('[WA] Contest reply send error:', e.message);
+                  }
+                }, 800);
+              }
+            } else {
+            // 5. Auto-reply
+            const rule = await matchAutoReply(userId, text);
+            if (rule) {
+              setTimeout(async () => {
+                try {
+                  await sock.sendMessage(jid, { text: rule.reply });
+                  await Message.create({
+                    userId,
+                    contactId: contact._id,
+                    phone,
+                    direction: 'outbound',
+                    body: rule.reply,
+                    autoReplyId: rule._id,
+                    status: 'sent',
+                    timestamp: new Date(),
+                  });
+                } catch (e) {
+                  console.error('[WA] Auto-reply send error:', e.message);
+                }
+              }, rule.delayMs || 1500);
+            } else if (isNewContact) {
+              // No keyword match but first message — send welcome if configured
+              const settings = await getUserSettings(userId);
+              if (settings.sendWelcome && settings.welcomeMessage) {
+                setTimeout(async () => {
+                  try {
+                    await sock.sendMessage(jid, { text: settings.welcomeMessage });
+                    await Message.create({
+                      userId, contactId: contact._id, phone,
+                      direction: 'outbound', body: settings.welcomeMessage,
+                      status: 'sent', timestamp: new Date(),
+                    });
+                  } catch (e) {
+                    console.error('[WA] Welcome send error:', e.message);
+                  }
+                }, settings.welcomeDelayMs || 1000);
+              }
             }
           }
 

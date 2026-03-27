@@ -96,6 +96,10 @@ app.use('/api/invoices',   require('./src/routes/invoices'));
 app.use('/api/finance',    require('./src/routes/finance'));
 app.use('/api/groups',     require('./src/routes/groups'));
 app.use('/api/settings',   require('./src/routes/settings'));
+// ── Affiliate referral system ─────────────────────────────────────────────────
+app.use('/api/affiliate',  require('./src/routes/affiliate'));
+app.use('/api/admin',      require('./src/routes/admin'));
+app.use('/api/contests',   require('./src/routes/contests'));
 
 // ── 404 ───────────────────────────────────────────────────────────────────────
 app.use((req, res) => {
