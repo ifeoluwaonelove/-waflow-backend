@@ -100,8 +100,6 @@ app.use('/api/groups',     (require('./src/routes/groups').router || require('./
 app.use('/api/settings',   (require('./src/routes/settings').router || require('./src/routes/settings')));
 
 // ── Affiliate referral system ─────────────────────────────────────────────────
-app.use('/api/affiliate',  (require('./src/routes/affiliate').router || require('./src/routes/affiliate')));
-app.use('/api/admin',      (require('./src/routes/admin').router || require('./src/routes/admin')));
 app.use('/api/contests',   (require('./src/routes/contests').router || require('./src/routes/contests')));
 
 
