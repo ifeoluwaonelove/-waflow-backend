@@ -93,15 +93,17 @@ app.use('/api/referral',   require('./src/routes/referral'));
 app.use('/api/analytics',  require('./src/routes/analytics'));
 app.use('/api/webhook',    require('./src/routes/webhook'));
 // ── New feature routes ────────────────────────────────────────────────────────
-app.use('/api/schedule',   require('./src/routes/schedule'));
-app.use('/api/invoices',   require('./src/routes/invoices'));
-app.use('/api/finance',    require('./src/routes/finance'));
-app.use('/api/groups',     require('./src/routes/groups'));
-app.use('/api/settings',   require('./src/routes/settings'));
+app.use('/api/schedule',   (require('./src/routes/schedule').router || require('./src/routes/schedule')));
+app.use('/api/invoices',   (require('./src/routes/invoices').router || require('./src/routes/invoices')));
+app.use('/api/finance',    (require('./src/routes/finance').router || require('./src/routes/finance')));
+app.use('/api/groups',     (require('./src/routes/groups').router || require('./src/routes/groups')));
+app.use('/api/settings',   (require('./src/routes/settings').router || require('./src/routes/settings')));
+
 // ── Affiliate referral system ─────────────────────────────────────────────────
-app.use('/api/affiliate',  require('./src/routes/affiliate'));
-app.use('/api/admin',      require('./src/routes/admin'));
-app.use('/api/contests',   require('./src/routes/contests'));
+app.use('/api/affiliate',  (require('./src/routes/affiliate').router || require('./src/routes/affiliate')));
+app.use('/api/admin',      (require('./src/routes/admin').router || require('./src/routes/admin')));
+app.use('/api/contests',   (require('./src/routes/contests').router || require('./src/routes/contests')));
+
 
 // ── 404 ───────────────────────────────────────────────────────────────────────
 app.use((req, res) => {
