@@ -43,7 +43,7 @@ const broadcastSchema = new mongoose.Schema({
   sentCount: { type: Number, default: 0 }
 }, { timestamps: true });
 
-// 4. CONTEST / REFERRAL SCHEMA
+// 4. CONTEST / REFERRAL SCHEMAS
 const contestSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   name: { type: String, required: true },
@@ -99,27 +99,19 @@ const messageSchema = new mongoose.Schema({
   type: { type: String, enum: ['inbound', 'outbound'] }
 }, { timestamps: true });
 
-// CLEANUP AND REGISTER
+// RESET AND REGISTER MODELS
 const m = mongoose.models;
-if (m.User) delete m.User;
-if (m.Contact) delete m.Contact;
-if (m.Broadcast) delete m.Broadcast;
-if (m.Contest) delete m.Contest;
-if (m.ContestParticipant) delete m.ContestParticipant;
-if (m.ReferralParticipant) delete m.ReferralParticipant;
-if (m.Schedule) delete m.Schedule;
-if (m.Invoice) delete m.Invoice;
-if (m.Transaction) delete m.Transaction;
-if (m.AutoReply) delete m.AutoReply;
-if (m.Message) delete m.Message;
+const resetModel = (name) => { if (m[name]) delete m[name]; };
+
+['User', 'Contact', 'Broadcast', 'Contest', 'ContestParticipant', 'Schedule', 'Invoice', 'Transaction', 'AutoReply', 'Message'].forEach(resetModel);
 
 const User = mongoose.model('User', userSchema);
 const Contact = mongoose.model('Contact', contactSchema);
 const Broadcast = mongoose.model('Broadcast', broadcastSchema);
 const Contest = mongoose.model('Contest', contestSchema);
 const ContestParticipant = mongoose.model('ContestParticipant', contestParticipantSchema);
-// ALIAS for old Referral code:
-const ReferralParticipant = mongoose.model('ReferralParticipant', contestParticipantSchema);
+// Alias for older referral controller code
+const ReferralParticipant = ContestParticipant;
 const Schedule = mongoose.model('Schedule', scheduleSchema);
 const Invoice = mongoose.model('Invoice', invoiceSchema);
 const Transaction = mongoose.model('Transaction', transactionSchema);
