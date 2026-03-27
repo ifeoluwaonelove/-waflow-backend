@@ -450,32 +450,6 @@ userSchema.methods.toJSON = function () {
 };
 
 // ── Contact ───────────────────────────────────────────────────────────────────
-const contactSchema = new mongoose.Schema({
-  userId:         { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
-  phone:          { type: String, required: true, trim: true },
-  name:           { type: String, trim: true, default: null },
-  generatedName:  { type: String, trim: true },
-  displayName:    { type: String, trim: true },
-  whatsappName:   { type: String, trim: true, default: null },
-  group:          { type: String, default: 'Leads' },
-  tags:           [{ type: String, trim: true }],
-  notes:          { type: String, maxlength: 1000 },
-  referredBy:     { type: String, default: null },
-  referrerId:     { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
-  totalMessages:  { type: Number, default: 0 },
-  lastMessageAt:  { type: Date },
-  firstMessageAt: { type: Date, default: Date.now },
-  isBlocked:      { type: Boolean, default: false },
-  isActive:       { type: Boolean, default: true },
-  isStatusViewer: { type: Boolean, default: false },
-  savedNumber:    { type: Boolean, default: false },
-}, { timestamps: true });
-
-contactSchema.index({ userId: 1, phone: 1 }, { unique: true });
-contactSchema.pre('save', function (next) {
-  this.displayName = this.name || this.whatsappName || this.generatedName || this.phone;
-  next();
-});
 
 // ── Broadcast ─────────────────────────────────────────────────────────────────
 const broadcastSchema = new mongoose.Schema({
