@@ -133,8 +133,4 @@ const ContestPayout = mongoose.model('ContestPayout', contestPayoutSchema);
 // Exporting aliases for older controller names
 const ReferralParticipant = ContestParticipant;
 
-module.exports = { 
-  User, Contact, Message, Broadcast, Schedule, AutoReply, 
-  Invoice, Receipt, Transaction, Contest, 
-  ContestParticipant, ContestReferral, ContestPayout, ReferralParticipant 
-};
+module.exports = router;
