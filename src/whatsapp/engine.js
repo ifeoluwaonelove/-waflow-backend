@@ -16,9 +16,8 @@ const path = require('path');
 const fs = require('fs');
 const QRCode = require('qrcode');
 
-const User = require('../models/User');
-const Contact = require('../models/Contact');
-const { Message, AutoReply, ReferralParticipant, Contest } = require('../models');
+const { User, Contact, Message, AutoReply, ReferralParticipant, Contest, UserSettings } = require('../models');
+
 
 // ── State ─────────────────────────────────────────────────────────────────────
 const sessions = new Map();          
@@ -56,7 +55,7 @@ const settingsCache = new Map();
 async function getUserSettings(userId) {
   if (settingsCache.has(userId)) return settingsCache.get(userId);
   try {
-    const { UserSettings } = require('../models');
+    
     let s = await UserSettings.findOne({ userId });
     if (!s) s = await UserSettings.create({ userId });
     settingsCache.set(userId, s);
