@@ -1,138 +1,140 @@
-'use strict';
-const express = require('express');
-const { protect } = require('../middleware/auth');
-const { Invoice, Receipt, Transaction } = require('../models');
-const { formatResponse, paginate } = require('../utils/response');
-const router = express.Router();
+const mongoose = require('mongoose');
 
-// ── Invoice number generator ──────────────────────────────────────────────────
-async function nextInvoiceNumber(userId) {
-  const last = await Invoice.findOne({ userId }).sort({ createdAt: -1 }).select('invoiceNumber');
-  if (!last) return 'INV-0001';
-  const n = parseInt(last.invoiceNumber.replace('INV-', '')) + 1;
-  return 'INV-' + String(n).padStart(4, '0');
-}
+// 1. USER
+const userSchema = new mongoose.Schema({
+  email: { type: String, required: true, unique: true },
+  password: { type: String, required: true },
+  role: { type: String, enum: ['user', 'admin'], default: 'user' },
+  isActive: { type: Boolean, default: true },
+  whatsappConnected: { type: Boolean, default: false },
+  whatsappNumber: { type: String },
+  whatsappName: { type: String },
+  referralCode: { type: String, unique: true, sparse: true }
+}, { timestamps: true });
 
-async function nextReceiptNumber(userId) {
-  const last = await Receipt.findOne({ userId }).sort({ createdAt: -1 }).select('receiptNumber');
-  if (!last) return 'REC-0001';
-  const n = parseInt(last.receiptNumber.replace('REC-', '')) + 1;
-  return 'REC-' + String(n).padStart(4, '0');
-}
+userSchema.methods.comparePassword = async function(cp) {
+  return require('bcryptjs').compare(cp, this.password);
+};
 
-// ── INVOICES ──────────────────────────────────────────────────────────────────
+// 2. CONTACTS & MESSAGES
+const contactSchema = new mongoose.Schema({
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  phone: String,
+  displayName: String,
+  group: { type: String, default: 'Leads' }
+}, { timestamps: true });
 
-// GET /api/invoices
-router.get('/', protect, async (req, res, next) => {
-  try {
-    const { status, page = 1, limit = 20 } = req.query;
-    const query = { userId: req.user._id };
-    if (status) query.status = status;
-    const total    = await Invoice.countDocuments(query);
-    const invoices = await Invoice.find(query).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(parseInt(limit));
-    res.json(paginate(invoices, total, page, limit));
-  } catch (err) { next(err); }
+const messageSchema = new mongoose.Schema({
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  body: String,
+  type: { type: String, enum: ['inbound', 'outbound'] }
+}, { timestamps: true });
+
+// 3. BROADCAST & SCHEDULER
+const broadcastSchema = new mongoose.Schema({
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  name: String,
+  content: String,
+  status: { type: String, default: 'pending' },
+  sentCount: { type: Number, default: 0 }
+}, { timestamps: true });
+
+const scheduleSchema = new mongoose.Schema({
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  target: String,
+  content: String,
+  scheduledAt: Date,
+  status: { type: String, default: 'pending' }
+}, { timestamps: true });
+
+// 4. AUTO-REPLY
+const autoReplySchema = new mongoose.Schema({
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  keywords: [String],
+  response: String,
+  status: { type: String, default: 'active' }
+}, { timestamps: true });
+
+// 5. FINANCE, INVOICE & RECEIPT
+const invoiceSchema = new mongoose.Schema({
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  invoiceNumber: String,
+  clientName: String,
+  total: Number,
+  status: { type: String, default: 'unpaid' }
+}, { timestamps: true });
+
+const receiptSchema = new mongoose.Schema({
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  receiptNumber: String,
+  clientName: String,
+  total: Number
+}, { timestamps: true });
+
+const transactionSchema = new mongoose.Schema({
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  type: { type: String, enum: ['income', 'expense'] },
+  amount: Number,
+  description: String
+}, { timestamps: true });
+
+// 6. CONTEST & REFERRAL (V4 MULTI-TYPE)
+const contestSchema = new mongoose.Schema({
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  name: String,
+  contestType: { type: String, default: 'leaderboard' },
+  status: { type: String, default: 'active' },
+  finalLeaderboard: Array
+}, { timestamps: true });
+
+const contestParticipantSchema = new mongoose.Schema({
+  contestId: { type: mongoose.Schema.Types.ObjectId, ref: 'Contest' },
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  phone: String,
+  name: String,
+  activeReferrals: { type: Number, default: 0 },
+  lifetimeReferrals: { type: Number, default: 0 },
+  totalEarned: { type: Number, default: 0 },
+  payoutStatus: { type: String, default: 'ineligible' }
+}, { timestamps: true });
+
+const contestReferralSchema = new mongoose.Schema({
+  contestId: { type: mongoose.Schema.Types.ObjectId, ref: 'Contest' },
+  referredPhone: String
+}, { timestamps: true });
+
+const contestPayoutSchema = new mongoose.Schema({
+  contestId: { type: mongoose.Schema.Types.ObjectId, ref: 'Contest' },
+  amount: Number,
+  status: { type: String, default: 'pending' },
+  requestedAt: { type: Date, default: Date.now }
+}, { timestamps: true });
+
+// --- REGISTRATION ---
+const m = mongoose.models;
+['User', 'Contact', 'Message', 'Broadcast', 'Schedule', 'AutoReply', 'Invoice', 'Receipt', 'Transaction', 'Contest', 'ContestParticipant', 'ContestReferral', 'ContestPayout'].forEach(name => {
+  if (m[name]) delete m[name];
 });
 
-// POST /api/invoices
-router.post('/', protect, async (req, res, next) => {
-  try {
-    const { clientName, clientPhone, clientEmail, items, tax = 0, discount = 0, currency = '₦', dueDate, notes } = req.body;
-    if (!clientName || !items?.length) return res.status(400).json(formatResponse(false, 'clientName and items are required'));
+const User = mongoose.model('User', userSchema);
+const Contact = mongoose.model('Contact', contactSchema);
+const Message = mongoose.model('Message', messageSchema);
+const Broadcast = mongoose.model('Broadcast', broadcastSchema);
+const Schedule = mongoose.model('Schedule', scheduleSchema);
+const AutoReply = mongoose.model('AutoReply', autoReplySchema);
+const Invoice = mongoose.model('Invoice', invoiceSchema);
+const Receipt = mongoose.model('Receipt', receiptSchema);
+const Transaction = mongoose.model('Transaction', transactionSchema);
+const Contest = mongoose.model('Contest', contestSchema);
+const ContestParticipant = mongoose.model('ContestParticipant', contestParticipantSchema);
+const ContestReferral = mongoose.model('ContestReferral', contestReferralSchema);
+const ContestPayout = mongoose.model('ContestPayout', contestPayoutSchema);
 
-    // Calculate totals
-    const processedItems = items.map(item => ({
-      ...item,
-      total: (item.quantity || 1) * item.unitPrice,
-    }));
-    const subtotal = processedItems.reduce((s, i) => s + i.total, 0);
-    const total    = subtotal + tax - discount;
+// Exporting aliases for older controller names
+const ReferralParticipant = ContestParticipant;
 
-    const invoiceNumber = await nextInvoiceNumber(req.user._id);
-    const invoice = await Invoice.create({
-      userId: req.user._id,
-      invoiceNumber, clientName, clientPhone, clientEmail,
-      items: processedItems, subtotal, tax, discount, total, currency,
-      dueDate: dueDate ? new Date(dueDate) : undefined, notes,
-    });
-    res.status(201).json(formatResponse(true, 'Invoice created', { invoice }));
-  } catch (err) { next(err); }
-});
-
-// PATCH /api/invoices/:id
-router.patch('/:id', protect, async (req, res, next) => {
-  try {
-    const invoice = await Invoice.findOneAndUpdate(
-      { _id: req.params.id, userId: req.user._id },
-      { $set: req.body }, { new: true }
-    );
-    if (!invoice) return res.status(404).json(formatResponse(false, 'Invoice not found'));
-
-    // If marking as paid — auto-create income transaction
-    if (req.body.status === 'paid' && invoice.status !== 'paid') {
-      await Transaction.create({
-        userId: req.user._id,
-        type: 'income',
-        amount: invoice.total,
-        description: `Invoice ${invoice.invoiceNumber} — ${invoice.clientName}`,
-        category: 'Invoice Payment',
-        date: new Date(),
-        invoiceId: invoice._id,
-      });
-    }
-    res.json(formatResponse(true, 'Invoice updated', { invoice }));
-  } catch (err) { next(err); }
-});
-
-// DELETE /api/invoices/:id
-router.delete('/:id', protect, async (req, res, next) => {
-  try {
-    await Invoice.findOneAndDelete({ _id: req.params.id, userId: req.user._id });
-    res.json(formatResponse(true, 'Invoice deleted'));
-  } catch (err) { next(err); }
-});
-
-// POST /api/invoices/:id/receipt — generate receipt from invoice
-router.post('/:id/receipt', protect, async (req, res, next) => {
-  try {
-    const invoice = await Invoice.findOne({ _id: req.params.id, userId: req.user._id });
-    if (!invoice) return res.status(404).json(formatResponse(false, 'Invoice not found'));
-
-    const receiptNumber = await nextReceiptNumber(req.user._id);
-    const receipt = await Receipt.create({
-      userId:        req.user._id,
-      invoiceId:     invoice._id,
-      receiptNumber,
-      clientName:    invoice.clientName,
-      clientPhone:   invoice.clientPhone,
-      items:         invoice.items,
-      total:         invoice.total,
-      currency:      invoice.currency,
-      paymentMethod: req.body.paymentMethod || 'Bank Transfer',
-      notes:         req.body.notes || '',
-    });
-
-    // Mark invoice as paid
-    await Invoice.findByIdAndUpdate(invoice._id, { status: 'paid', paidAt: new Date() });
-
-    res.status(201).json(formatResponse(true, 'Receipt generated', { receipt }));
-  } catch (err) { next(err); }
-});
-
-// ── RECEIPTS ──────────────────────────────────────────────────────────────────
-
-// GET /api/invoices/receipts
-router.get('/receipts', protect, async (req, res, next) => {
-  try {
-    const { page = 1, limit = 20 } = req.query;
-    const total    = await Receipt.countDocuments({ userId: req.user._id });
-    const receipts = await Receipt.find({ userId: req.user._id })
-      .populate('invoiceId', 'invoiceNumber')
-      .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(parseInt(limit));
-    res.json(paginate(receipts, total, page, limit));
-  } catch (err) { next(err); }
-});
-
-module.exports = router;
+module.exports = { 
+  User, Contact, Message, Broadcast, Schedule, AutoReply, 
+  Invoice, Receipt, Transaction, Contest, 
+  ContestParticipant, ContestReferral, ContestPayout, ReferralParticipant 
+};
