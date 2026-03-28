@@ -5,6 +5,23 @@ const { Contact, Broadcast, Message } = require('../models');
 const { formatResponse } = require('../utils/response');
 const router = express.Router();
 
+// ============ ROOT ENDPOINT ============
+/**
+ * GET /api/broadcast
+ * Root endpoint to check if broadcast API is working
+ */
+router.get('/', protect, async (req, res) => {
+  res.json(formatResponse(true, 'Broadcast API is working', {
+    endpoints: [
+      'GET /contacts/filtered - Get filtered contacts with search and filters',
+      'POST /contacts/selected - Get details of selected contacts',
+      'POST /create-selective - Create a selective broadcast',
+      'GET /stats/contacts - Get contact statistics'
+    ],
+    version: '1.0.0'
+  }));
+});
+
 // ============ SELECTIVE BROADCASTING ROUTES ============
 
 /**
