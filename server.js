@@ -11,11 +11,9 @@ const rateLimit = require('express-rate-limit');
 const mongoSanitize = require('express-mongo-sanitize');
 const fs = require('fs');
 const path = require('path');
-// Force all models to register before any other service starts
-require('./src/models/index'); 
 
 const connectDB = require('./src/config/database');
-const { createSession } = require('./src/whatsapp/engine');
+const { initWhatsApp } = require('./src/whatsapp/engine');
 const { startScheduler } = require('./src/services/schedulerService');
 const { formatResponse } = require('./src/utils/response');
 
@@ -89,19 +87,16 @@ app.use('/api/whatsapp',   require('./src/routes/whatsapp'));
 app.use('/api/contacts',   require('./src/routes/contacts'));
 app.use('/api/broadcast',  require('./src/routes/broadcast'));
 app.use('/api/auto-reply', require('./src/routes/autoReply'));
-app.use('/api/referral',   require('./src/routes/referral'));
 app.use('/api/analytics',  require('./src/routes/analytics'));
 app.use('/api/webhook',    require('./src/routes/webhook'));
 // ── New feature routes ────────────────────────────────────────────────────────
-app.use('/api/schedule',   (require('./src/routes/schedule').router || require('./src/routes/schedule')));
-app.use('/api/invoices',   (require('./src/routes/invoices').router || require('./src/routes/invoices')));
-app.use('/api/finance',    (require('./src/routes/finance').router || require('./src/routes/finance')));
-app.use('/api/groups',     (require('./src/routes/groups').router || require('./src/routes/groups')));
-app.use('/api/settings',   (require('./src/routes/settings').router || require('./src/routes/settings')));
-
+app.use('/api/schedule',   require('./src/routes/schedule'));
+app.use('/api/invoices',   require('./src/routes/invoices'));
+app.use('/api/finance',    require('./src/routes/finance'));
+app.use('/api/groups',     require('./src/routes/groups'));
+app.use('/api/settings',   require('./src/routes/settings'));
 // ── Affiliate referral system ─────────────────────────────────────────────────
-app.use('/api/contests',   (require('./src/routes/contests').router || require('./src/routes/contests')));
-
+app.use('/api/contests',   require('./src/routes/contests'));
 
 // ── 404 ───────────────────────────────────────────────────────────────────────
 app.use((req, res) => {
@@ -133,18 +128,8 @@ async function start() {
   try {
     await connectDB();
 
-    // Restore WhatsApp sessions only for users who were previously connected
-    const { User } = require('./src/models');
-    const connectedUsers = await User.find({ whatsappConnected: true });
-    console.log(`[WA] Restoring ${connectedUsers.length} sessions...`);
-    
-    for (const user of connectedUsers) {
-      try {
-        await createSession(user._id.toString(), io);
-      } catch (err) {
-        console.error(`[WA] Failed to restore session for ${user.email}:`, err.message);
-      }
-    }
+    // Restore WhatsApp sessions for all connected users
+    await initWhatsApp(io);
 
     // Cron scheduler for broadcasts
     startScheduler();
