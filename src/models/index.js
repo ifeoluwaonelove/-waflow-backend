@@ -14,6 +14,7 @@ const userSchema = new mongoose.Schema({
   whatsappConnected:   { type: Boolean, default: false },
   whatsappPhone:       { type: String, default: null },
   whatsappName:        { type: String, default: null },
+  whatsappPushName:    { type: String, default: null },  // ← NEW FIELD
   whatsappSessionPath: { type: String, default: null, select: false },
   isActive:            { type: Boolean, default: true },
   lastLogin:           { type: Date },
@@ -316,4 +317,5 @@ module.exports = {
   Transaction:        mongoose.model('Transaction',        transactionSchema),
   UserSettings:       mongoose.model('UserSettings',       userSettingsSchema),
   GroupMember:        mongoose.model('GroupMember',        groupMemberSchema),
+    Session:            mongoose.model('Session',            sessionSchema),
 };

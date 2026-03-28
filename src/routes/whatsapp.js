@@ -2,7 +2,7 @@
 const express = require('express');
 const { protect } = require('../middleware/auth');
 const { createSession, disconnectSession, sendMessage, sessions } = require('../whatsapp/engine');
-const { Message, Contact } = require('../models');
+const { Message, Contact, User } = require('../models');
 const { formatResponse } = require('../utils/response');
 const router = express.Router();
 
@@ -21,11 +21,32 @@ router.post('/disconnect', protect, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.get('/status', protect, (req, res) => {
-  res.json(formatResponse(true, 'OK', {
-    connected: sessions.has(req.user._id.toString()),
-    phone: req.user.whatsappPhone || null,
-  }));
+router.get('/status', protect, async (req, res) => {
+  try {
+    // Fetch fresh user data to get the latest push name
+    const user = await User.findById(req.user._id).select('whatsappConnected whatsappPhone whatsappName whatsappPushName');
+    
+    // Determine what to display
+    const displayName = user.whatsappPushName || user.whatsappName || user.whatsappPhone;
+    const isConnected = sessions.has(req.user._id.toString()) && user.whatsappConnected;
+    
+    res.json(formatResponse(true, 'OK', {
+      connected: isConnected,
+      phone: user.whatsappPhone || null,
+      pushName: user.whatsappPushName || null,
+      displayName: displayName || null,
+      message: isConnected && displayName ? `${displayName} (Connected)` : isConnected ? 'Connected' : 'Not connected'
+    }));
+  } catch (err) {
+    console.error('[WhatsApp Status] Error:', err);
+    res.json(formatResponse(true, 'OK', {
+      connected: sessions.has(req.user._id.toString()),
+      phone: req.user.whatsappPhone || null,
+      pushName: null,
+      displayName: null,
+      message: sessions.has(req.user._id.toString()) ? 'Connected' : 'Not connected'
+    }));
+  }
 });
 
 router.post('/send-message', protect, async (req, res, next) => {

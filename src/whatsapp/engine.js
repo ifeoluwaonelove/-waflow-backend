@@ -29,6 +29,7 @@ const QRCode = require('qrcode');
 
 const User = require('../models/User');
 const Contact = require('../models/Contact');
+const { saveSession, getSession, revokeSession } = require('../services/sessionService');
 const { Message, AutoReply, ReferralParticipant, Contest } = require('../models');
 const { handleContestCommand }  = require('../services/contestCommandHandler');
 
@@ -227,14 +228,37 @@ async function createSession(userId, io, forceNew = false) {
 
         if (connection === 'open') {
           const phone    = sock.user?.id ? jidToPhone(sock.user.id) : null;
-          const pushName = sock.user?.name || null;
+          const pushName = sock.user?.name || null;  // This is the official WhatsApp push name
+          
+          // Check if we already have a session record
+          if (phone && userId) {
+            const existingSession = await getSession(userId, phone);
+            if (!existingSession) {
+              // Create initial session record
+              const { state } = await useMultiFileAuthState(sPath);
+              await saveSession(userId, phone, state.creds || {}, {
+                platform: process.platform,
+                browser: 'WAFlow',
+                version: require('../../package.json').version
+              });
+              console.log(`[Session] Created initial session for ${phone}`);
+            } else {
+              console.log(`[Session] Using existing session for ${phone}`);
+            }
+          }
+          
           await User.findByIdAndUpdate(userId, {
             whatsappConnected:   true,
             whatsappPhone:       phone,
             whatsappName:        pushName,
+            whatsappPushName:    pushName,  // Store push name separately for branding
             whatsappSessionPath: sPath,
           });
-          io.to(`user-${userId}`).emit('whatsapp:connected', { phone, name: pushName });
+          io.to(`user-${userId}`).emit('whatsapp:connected', { 
+            phone, 
+            name: pushName,
+            pushName: pushName  // Send push name to frontend for display
+          });
           console.log(`[WA] User ${userId} connected — ${pushName || phone}`);
         }
 
@@ -262,7 +286,23 @@ async function createSession(userId, io, forceNew = false) {
       }
     });
 
-    sock.ev.on('creds.update', saveCreds);
+    // ── Save session when credentials update ─────────────────────────────────
+    sock.ev.on('creds.update', async (creds) => {
+      try {
+        const phone = sock.user?.id ? jidToPhone(sock.user.id) : null;
+        if (phone && userId) {
+          // Save session data to database (prevents duplicates)
+          await saveSession(userId, phone, creds, {
+            platform: process.platform,
+            browser: 'WAFlow',
+            version: require('../../package.json').version
+          });
+          console.log(`[Session] Saved session for ${phone}`);
+        }
+      } catch (err) {
+        console.error('[Session] Save error:', err.message);
+      }
+    });
 
     // ── Incoming messages ─────────────────────────────────────────────────────
     sock.ev.on('messages.upsert', async ({ messages: msgs, type }) => {
@@ -425,18 +465,37 @@ async function disconnectSession(userId) {
     clearTimeout(reconnectTimers.get(userId));
     reconnectTimers.delete(userId);
   }
+  
   const sock = sessions.get(userId);
+  const phone = sock?.user?.id ? jidToPhone(sock.user.id) : null;
+  
   if (sock) {
-    try { await sock.logout(); } catch (_) {}
+    try { 
+      await sock.logout(); 
+    } catch (_) {}
     sessions.delete(userId);
   }
+  
+  // Revoke session in database
+  if (phone && userId) {
+    try {
+      await revokeSession(userId, phone, 'user_disconnect');
+      console.log(`[Session] Revoked session for ${phone}`);
+    } catch (err) {
+      console.error('[Session] Revoke error:', err.message);
+    }
+  }
+  
   const sPath = sessionPath(userId);
   if (fs.existsSync(sPath)) {
     try { fs.rmSync(sPath, { recursive: true }); } catch (_) {}
   }
+  
   await User.findByIdAndUpdate(userId, {
     whatsappConnected: false,
     whatsappPhone: null,
+    whatsappName: null,
+    whatsappPushName: null,
     whatsappSessionPath: null,
   });
 }
