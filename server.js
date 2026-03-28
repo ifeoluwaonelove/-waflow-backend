@@ -28,6 +28,10 @@ if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
 const app = express();
 const server = http.createServer(app);
 
+// ── CRITICAL FIX: Enable trust proxy for platforms like Render, Heroku, etc.
+// This should be set BEFORE any middleware that uses req.ip
+app.set('trust proxy', 1); // Trust first proxy
+
 // ── Socket.IO ─────────────────────────────────────────────────────────────────
 const io = new Server(server, {
   cors: {
@@ -68,12 +72,20 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(mongoSanitize());
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 
-// ── Rate limiting ─────────────────────────────────────────────────────────────
+// ── Rate limiting with proper proxy handling ─────────────────────────────────────────────
 const limiter = rateLimit({
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
   max: parseInt(process.env.RATE_LIMIT_MAX) || 100,
   standardHeaders: true,
   legacyHeaders: false,
+  // Add custom key generator to handle proxy IPs correctly
+  keyGenerator: (req) => {
+    // Get the real IP from the proxy headers
+    return req.ip || 
+           req.headers['x-forwarded-for']?.split(',')[0] || 
+           req.connection?.remoteAddress ||
+           'unknown';
+  },
   handler: (req, res) => res.status(429).json(
     formatResponse(false, 'Too many requests. Please try again later.')
   ),
@@ -110,15 +122,25 @@ app.use((err, req, res, next) => {
     ? 'Internal server error'
     : err.message;
   console.error(`[Error] ${err.stack || err.message}`);
+  
+  // Handle specific rate limiter error
+  if (err.code === 'ERR_ERL_UNEXPECTED_X_FORWARDED_FOR') {
+    console.error('Rate limiter proxy configuration error - trust proxy is enabled but header handling issue');
+    return res.status(500).json(formatResponse(false, 'Rate limiter configuration issue'));
+  }
+  
   res.status(status).json(formatResponse(false, msg));
 });
 
 // ── Socket.IO events ──────────────────────────────────────────────────────────
 io.on('connection', (socket) => {
+  console.log(`[Socket] New connection: ${socket.id}`);
   socket.on('join-user-room', (userId) => {
     socket.join(`user-${userId}`);
   });
-  socket.on('disconnect', () => {});
+  socket.on('disconnect', () => {
+    console.log(`[Socket] Disconnected: ${socket.id}`);
+  });
 });
 
 // ── Startup ───────────────────────────────────────────────────────────────────
@@ -127,6 +149,7 @@ const PORT = parseInt(process.env.PORT) || 5000;
 async function start() {
   try {
     await connectDB();
+    console.log('[DB] Database connected successfully');
 
     // Restore WhatsApp sessions for all connected users
     await initWhatsApp(io);
@@ -146,13 +169,20 @@ async function start() {
 // ── Graceful shutdown ─────────────────────────────────────────────────────────
 process.on('SIGTERM', () => {
   console.log('[Server] SIGTERM received — shutting down gracefully');
-  server.close(() => process.exit(0));
+  server.close(() => {
+    console.log('[Server] Server closed');
+    process.exit(0);
+  });
 });
 process.on('SIGINT', () => {
-  server.close(() => process.exit(0));
+  console.log('[Server] SIGINT received — shutting down gracefully');
+  server.close(() => {
+    console.log('[Server] Server closed');
+    process.exit(0);
+  });
 });
-process.on('unhandledRejection', (reason) => {
-  console.error('[Server] Unhandled Rejection:', reason);
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[Server] Unhandled Rejection at:', promise, 'reason:', reason);
 });
 process.on('uncaughtException', (err) => {
   console.error('[Server] Uncaught Exception:', err);
