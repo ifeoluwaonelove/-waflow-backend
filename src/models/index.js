@@ -300,18 +300,6 @@ const groupMemberSchema = new mongoose.Schema({
 
 groupMemberSchema.index({ userId: 1, groupJid: 1, phone: 1 }, { unique: true });
 
-// ── GroupMember ───────────────────────────────────────────────────────────────
-const groupMemberSchema = new mongoose.Schema({
-  userId:      { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
-  groupJid:    { type: String, required: true },
-  groupName:   { type: String },
-  phone:       { type: String, required: true },
-  name:        { type: String },
-  extractedAt: { type: Date, default: Date.now },
-}, { timestamps: true });
-
-groupMemberSchema.index({ userId: 1, groupJid: 1, phone: 1 }, { unique: true });
-
 // ── Session ───────────────────────────────────────────────────────────────────
 const sessionSchema = new mongoose.Schema({
   userId: { 
@@ -368,5 +356,5 @@ module.exports = {
   Transaction:        mongoose.model('Transaction',        transactionSchema),
   UserSettings:       mongoose.model('UserSettings',       userSettingsSchema),
   GroupMember:        mongoose.model('GroupMember',        groupMemberSchema),
-    Session:            mongoose.model('Session',            sessionSchema),
+  Session:            mongoose.model('Session',            sessionSchema),
 };
