@@ -1,5 +1,5 @@
 'use strict';
-const Session = require('../models/Session');
+const { Session } = require('../models');
 
 /**
  * Save or update session - prevents duplicates by using upsert
