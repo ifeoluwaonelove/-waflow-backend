@@ -300,6 +300,57 @@ const groupMemberSchema = new mongoose.Schema({
 
 groupMemberSchema.index({ userId: 1, groupJid: 1, phone: 1 }, { unique: true });
 
+// ── GroupMember ───────────────────────────────────────────────────────────────
+const groupMemberSchema = new mongoose.Schema({
+  userId:      { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  groupJid:    { type: String, required: true },
+  groupName:   { type: String },
+  phone:       { type: String, required: true },
+  name:        { type: String },
+  extractedAt: { type: Date, default: Date.now },
+}, { timestamps: true });
+
+groupMemberSchema.index({ userId: 1, groupJid: 1, phone: 1 }, { unique: true });
+
+// ── Session ───────────────────────────────────────────────────────────────────
+const sessionSchema = new mongoose.Schema({
+  userId: { 
+    type: mongoose.Schema.Types.ObjectId, 
+    ref: 'User', 
+    required: true,
+    index: true
+  },
+  whatsappNumber: { 
+    type: String, 
+    required: true,
+    trim: true
+  },
+  sessionData: { 
+    type: mongoose.Schema.Types.Mixed, 
+    required: true 
+  },
+  status: { 
+    type: String, 
+    enum: ['active', 'expired', 'revoked'], 
+    default: 'active' 
+  },
+  lastUsed: { 
+    type: Date, 
+    default: Date.now 
+  },
+  deviceInfo: {
+    platform: { type: String, default: null },
+    browser: { type: String, default: null },
+    version: { type: String, default: null }
+  }
+}, { 
+  timestamps: true 
+});
+
+sessionSchema.index({ userId: 1, whatsappNumber: 1 }, { unique: true });
+sessionSchema.index({ lastUsed: -1 });
+sessionSchema.index({ status: 1 });
+
 // ── Exports ───────────────────────────────────────────────────────────────────
 module.exports = {
   User:               mongoose.model('User',               userSchema),
