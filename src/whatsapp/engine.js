@@ -28,6 +28,7 @@ const fs = require('fs');
 const QRCode = require('qrcode');
 
 const User = require('../models/User');
+const { generateInvoiceFromMessage } = require('../services/invoiceService');
 const Contact = require('../models/Contact');
 const { saveSession, getSession, revokeSession } = require('../services/sessionService');
 const { Message, AutoReply, ReferralParticipant, Contest } = require('../models');
@@ -304,7 +305,7 @@ async function createSession(userId, io, forceNew = false) {
       }
     });
 
-    // ── Incoming messages ─────────────────────────────────────────────────────
+       // ── Incoming messages ─────────────────────────────────────────────────────
     sock.ev.on('messages.upsert', async ({ messages: msgs, type }) => {
       if (type !== 'notify') return;
 
@@ -346,7 +347,7 @@ async function createSession(userId, io, forceNew = false) {
             await Contact.findByIdAndUpdate(contact._id, { isStatusViewer: true, savedNumber: true });
           }
 
-          // 4. Contest command handler (leaderboard / per-referral contests)
+          // 4. Contest command handler
           const contestResult = await handleContestCommand(userId, phone, text, msg.pushName, sock, jid);
           if (contestResult.handled) {
             if (contestResult.reply) {
@@ -385,7 +386,6 @@ async function createSession(userId, io, forceNew = false) {
                 }
               }, rule.delayMs || 1500);
             } else if (isNewContact) {
-              // No keyword match but first message — send welcome if configured
               const settings = await getUserSettings(userId);
               if (settings.sendWelcome && settings.welcomeMessage) {
                 setTimeout(async () => {
@@ -404,11 +404,69 @@ async function createSession(userId, io, forceNew = false) {
             }
           }
 
+          // 7. Auto-generate invoice for payment keywords
+          const lowerText = text.toLowerCase();
+          if (lowerText.includes('pay') && lowerText.includes('for')) {
+            const invoice = await generateInvoiceFromMessage(userId, phone, text);
+            if (invoice) {
+              setTimeout(async () => {
+                try {
+                  const invoiceMessage = `📄 *INVOICE GENERATED* 📄\n\n` +
+                    `Invoice #: ${invoice.invoiceNumber}\n` +
+                    `Amount: ₦${invoice.total.toLocaleString()}\n` +
+                    `Due Date: ${new Date(invoice.dueDate).toLocaleDateString()}\n\n` +
+                    `Please make payment to complete your order.\n\n` +
+                    `_Reply with "PAID ${invoice.invoiceNumber}" when payment is sent._`;
+                  
+                  await sock.sendMessage(jid, { text: invoiceMessage });
+                  await Message.create({
+                    userId, contactId: contact._id, phone,
+                    direction: 'outbound', body: invoiceMessage,
+                    status: 'sent', timestamp: new Date(),
+                  });
+                } catch (e) {
+                  console.error('[WA] Invoice send error:', e.message);
+                }
+              }, 1000);
+            }
+          }
+          
+          // 8. Handle "PAID" confirmation
+          if (lowerText.match(/^paid\s+inv/i)) {
+            const invoiceMatch = text.match(/INV-\d+/i);
+            if (invoiceMatch) {
+              const invoiceNumber = invoiceMatch[0];
+              const { processPayment, generateReceiptMessage } = require('../services/invoiceService');
+              
+              const result = await processPayment(invoiceNumber, 0, 'customer_confirmed');
+              if (result.success) {
+                const receiptMsg = generateReceiptMessage(result.invoice);
+                setTimeout(async () => {
+                  try {
+                    await sock.sendMessage(jid, { text: receiptMsg });
+                    await Message.create({
+                      userId, contactId: contact._id, phone,
+                      direction: 'outbound', body: receiptMsg,
+                      status: 'sent', timestamp: new Date(),
+                    });
+                  } catch (e) {
+                    console.error('[WA] Receipt send error:', e.message);
+                  }
+                }, 800);
+              } else {
+                setTimeout(async () => {
+                  await sock.sendMessage(jid, { text: `❌ ${result.message}` });
+                }, 800);
+              }
+            }
+          }
+
           // 6. Emit real-time event
           io.to(`user-${userId}`).emit('whatsapp:message', {
             contact: { id: contact._id, name: contact.displayName, phone },
-            message: { text, timestamp: Date.now() },
+            message: { text, timestamp: Date.now() }
           });
+          
         } catch (err) {
           console.error('[WA] Message processing error:', err.message);
         }

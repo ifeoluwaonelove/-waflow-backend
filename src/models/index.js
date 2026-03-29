@@ -242,6 +242,11 @@ const invoiceSchema = new mongoose.Schema({
   dueDate:  Date,
   paidAt:   Date,
   notes:    String,
+    paymentStatus: { type: String, enum: ['pending', 'paid', 'overdue', 'cancelled'], default: 'pending' },
+  paymentMethod: { type: String, enum: ['bank_transfer', 'card', 'cash', 'whatsapp_pay'], default: null },
+  paymentDate: { type: Date, default: null },
+  paymentReference: { type: String, default: null },
+  whatsappMessageId: { type: String, default: null },
 }, { timestamps: true });
 
 invoiceSchema.index({ userId: 1, invoiceNumber: 1 }, { unique: true });
