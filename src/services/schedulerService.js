@@ -7,6 +7,16 @@
 const cron = require('node-cron');
 const { Broadcast, Message, Contact, Schedule } = require('../models');
 const { sessions, sendMessage } = require('../whatsapp/engine');
+const { startCleanupScheduler } = require('./cleanupService');
+
+function startScheduler() {
+  // ... existing scheduler code ...
+  
+  // Start cleanup scheduler
+  startCleanupScheduler();
+  
+  console.log('[Scheduler] All jobs started');
+}
 
 // ── Broadcast helpers ─────────────────────────────────────────────────────────
 function personalize(text, contact) {

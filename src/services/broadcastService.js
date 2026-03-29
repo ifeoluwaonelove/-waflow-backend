@@ -1,4 +1,5 @@
 'use strict';
+const { cleanupSingleBroadcast } = require('../jobs/cleanupBroadcasts');
 const { Broadcast, Contact, Message } = require('../models');
 const { sendMessage } = require('../whatsapp/engine');
 
@@ -145,3 +146,15 @@ async function processBroadcast(broadcastId) {
 }
 
 module.exports = { processBroadcast };
+    // After successful broadcast, schedule cleanup (optional immediate or delayed)
+    if (broadcast.status === 'sent') {
+      // Clean up after 1 hour (give time for any processing)
+      setTimeout(async () => {
+        try {
+          await cleanupSingleBroadcast(broadcastId);
+          console.log(`[Broadcast] Auto-cleaned broadcast ${broadcastId}`);
+        } catch (err) {
+          console.error(`[Broadcast] Auto-cleanup failed for ${broadcastId}:`, err);
+        }
+      }, 60 * 60 * 1000); // 1 hour delay
+    }
