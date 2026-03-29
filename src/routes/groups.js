@@ -127,4 +127,48 @@ router.get('/members/export', protect, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+/**
+ * GET /api/groups/:jid/members/all
+ * Get ALL group members (bypasses Baileys 100-member cache limit)
+ * This forces a fresh fetch from WhatsApp instead of using cached data
+ */
+router.get('/:jid/members/all', protect, async (req, res, next) => {
+  try {
+    const sock = sessions.get(req.user._id.toString());
+    if (!sock) {
+      return res.status(400).json(formatResponse(false, 'WhatsApp not connected'));
+    }
+
+    const { jid } = req.params;
+    
+    // Force fetch fresh group metadata (NOT from cache)
+    let meta;
+    try {
+      meta = await sock.groupMetadata(jid);
+    } catch (e) {
+      return res.status(400).json(formatResponse(false, 'Could not fetch group: ' + e.message));
+    }
+
+    // Extract ALL participants (no 100 limit like the cached version)
+    const allMembers = (meta.participants || []).map(p => ({
+      id: p.id,
+      name: p.notify || p.name || null,
+      phone: '+' + p.id.replace('@s.whatsapp.net', '').replace('@c.us', ''),
+      isAdmin: p.admin === 'admin' || p.admin === 'superadmin',
+      isSuperAdmin: p.admin === 'superadmin'
+    }));
+    
+    console.log(`[Group Extract] Extracted ALL ${allMembers.length} members from ${meta.subject}`);
+    
+    res.json(formatResponse(true, 'OK', {
+      groupName: meta.subject,
+      totalMembers: allMembers.length,
+      members: allMembers
+    }));
+  } catch (err) { 
+    console.error('[Groups API] Get all members error:', err);
+    next(err); 
+  }
+});
+
 module.exports = router;

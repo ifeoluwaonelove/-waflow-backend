@@ -525,5 +525,35 @@ async function initWhatsApp(io) {
     }
   }
 }
+/**
+ * Extract ALL group members (bypasses Baileys 100-member cache limit)
+ * @param {string} userId - User ID
+ * @param {string} groupId - Group JID (e.g., "1234567890@g.us")
+ * @returns {Promise<Array>} List of all group members
+ */
+async function getAllGroupMembers(userId, groupId) {
+  const sock = sessions.get(userId);
+  if (!sock) throw new Error('WhatsApp not connected');
 
-module.exports = { createSession, disconnectSession, sendMessage, initWhatsApp, sessions };
+  try {
+    // Force fetch fresh group metadata (NOT from cache)
+    const groupMetadata = await sock.groupMetadata(groupId);
+    
+    // Extract ALL participants (no 100 limit)
+    const allMembers = groupMetadata.participants.map(p => ({
+      id: p.id,
+      name: p.name || null,
+      phone: p.id.split('@')[0], // Extract phone number from JID
+      isAdmin: p.admin === 'admin' || p.admin === 'superadmin',
+      isSuperAdmin: p.admin === 'superadmin'
+    }));
+    
+    console.log(`[Group Extract] Extracted ${allMembers.length} members from ${groupMetadata.subject}`);
+    return allMembers;
+  } catch (err) {
+    console.error('[Group Extract] Error:', err);
+    throw err;
+  }
+}
+
+module.exports = { createSession, disconnectSession, sendMessage, initWhatsApp, sessions, getAllGroupMembers };

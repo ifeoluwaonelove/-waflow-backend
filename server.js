@@ -95,6 +95,7 @@ app.use('/api/', limiter);
 // ── Routes ────────────────────────────────────────────────────────────────────
 app.use('/api/health',     require('./src/routes/health'));
 app.use('/api/auth',       require('./src/routes/auth'));
+app.use('/api/groups',     require('./src/routes/groups'));
 app.use('/api/whatsapp',   require('./src/routes/whatsapp'));
 app.use('/api/contacts',   require('./src/routes/contacts'));
 app.use('/api/broadcast',  require('./src/routes/broadcast'));
