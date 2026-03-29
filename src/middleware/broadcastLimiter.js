@@ -18,3 +18,9 @@ const groupTagAllLimiter = rateLimit({
 });
 
 module.exports = { selectiveBroadcastLimiter, groupTagAllLimiter };
+const groupBroadcastLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 1,
+  keyGenerator: (req) => `${req.user._id}-${req.body.groupId}`,
+  message: 'Too many group broadcasts. Please wait an hour before sending another @all broadcast.'
+});

@@ -262,3 +262,157 @@ router.get('/stats/contacts', protect, async (req, res, next) => {
 });
 
 module.exports = router;
+/**
+ * POST /api/broadcast/group
+ * Send broadcast to group with @all mention (admin only)
+ */
+router.post('/group', protect, async (req, res, next) => {
+  try {
+    const { groupId, message, tagAll = false } = req.body;
+    const userId = req.user._id;
+    
+    if (!groupId) {
+      return res.status(400).json(formatResponse(false, 'Group ID is required'));
+    }
+    
+    if (!message || !message.trim()) {
+      return res.status(400).json(formatResponse(false, 'Message is required'));
+    }
+    
+    // Get user's WhatsApp connection
+    const user = await User.findById(userId);
+    if (!user.whatsappConnected) {
+      return res.status(400).json(formatResponse(false, 'WhatsApp not connected. Please connect WhatsApp first.'));
+    }
+    
+    // Check rate limit for group broadcasts (1 per hour)
+    const lastGroupBroadcast = await Broadcast.findOne({
+      userId,
+      targetGroup: groupId,
+      status: 'sent',
+      sentAt: { $gte: new Date(Date.now() - 60 * 60 * 1000) } // Last hour
+    });
+    
+    if (lastGroupBroadcast && tagAll) {
+      return res.status(429).json(formatResponse(false, 'Rate limit: Only 1 group @all broadcast per hour. Please wait before sending another.'));
+    }
+    
+    // Get sock instance from whatsapp engine
+    const { sessions } = require('../whatsapp/engine');
+    const sock = sessions.get(userId.toString());
+    
+    if (!sock) {
+      return res.status(400).json(formatResponse(false, 'WhatsApp session not active. Please reconnect WhatsApp.'));
+    }
+    
+    // Get group metadata from WhatsApp
+    let groupMetadata;
+    try {
+      groupMetadata = await sock.groupMetadata(groupId);
+    } catch (err) {
+      console.error('[Group Broadcast] Failed to get group metadata:', err);
+      return res.status(400).json(formatResponse(false, 'Failed to get group information. Make sure you are still a member of this group.'));
+    }
+    
+    // Check if user is admin (only required for @all mentions)
+    const isAdmin = groupMetadata.participants.some(p => 
+      p.id === sock.user.id && (p.admin === 'admin' || p.admin === 'superadmin')
+    );
+    
+    if (tagAll && !isAdmin) {
+      return res.status(403).json(formatResponse(false, 'Only group admins can use @all mentions. You need to be a group admin to tag all members.'));
+    }
+    
+    // Prepare mentions array
+    let mentions = [];
+    if (tagAll) {
+      // Get all participant JIDs except the sender
+      mentions = groupMetadata.participants
+        .filter(p => p.id !== sock.user.id)
+        .map(p => p.id);
+      
+      // Limit mentions to 100 to avoid rate limiting issues
+      if (mentions.length > 100) {
+        return res.status(400).json(formatResponse(false, `Group has ${mentions.length} members. @all mentions limited to 100 members to prevent spam.`));
+      }
+    }
+    
+    // Send message with mentions
+    let sentMessage;
+    try {
+      if (tagAll && mentions.length > 0) {
+        sentMessage = await sock.sendMessage(groupId, {
+          text: message,
+          mentions: mentions
+        });
+      } else {
+        sentMessage = await sock.sendMessage(groupId, {
+          text: message
+        });
+      }
+    } catch (err) {
+      console.error('[Group Broadcast] Failed to send message:', err);
+      return res.status(500).json(formatResponse(false, 'Failed to send message: ' + err.message));
+    }
+    
+    // Save broadcast record
+    const broadcast = new Broadcast({
+      userId,
+      title: `Group broadcast to ${groupMetadata.subject}`,
+      messages: [{ text: message }],
+      targetType: 'group',
+      targetGroup: groupId,
+      totalRecipients: tagAll ? mentions.length : 1,
+      status: 'sent',
+      sentAt: new Date(),
+      delivered: tagAll ? mentions.length : 1,
+      failed: 0
+    });
+    
+    await broadcast.save();
+    
+    res.json(formatResponse(true, 'Group broadcast sent successfully', {
+      groupName: groupMetadata.subject,
+      recipients: tagAll ? mentions.length : 1,
+      tagAllUsed: tagAll,
+      broadcastId: broadcast._id,
+      message: tagAll ? `Message sent to ${mentions.length} members with @all mention` : 'Message sent to group'
+    }));
+    
+  } catch (err) {
+    console.error('[Group Broadcast] Error:', err);
+    next(err);
+  }
+});
+
+/**
+ * GET /api/broadcast/groups
+ * Get all WhatsApp groups the user is in
+ */
+router.get('/groups', protect, async (req, res, next) => {
+  try {
+    const userId = req.user._id;
+    
+    // Get sock instance
+    const { sessions } = require('../whatsapp/engine');
+    const sock = sessions.get(userId.toString());
+    
+    if (!sock) {
+      return res.status(400).json(formatResponse(false, 'WhatsApp not connected'));
+    }
+    
+    // Get all chats
+    const chats = await sock.groupFetchAllParticipating();
+    const groups = Object.values(chats).map(group => ({
+      id: group.id,
+      name: group.subject,
+      participantCount: group.participants?.length || 0,
+      isAdmin: group.participants?.some(p => p.id === sock.user.id && (p.admin === 'admin' || p.admin === 'superadmin')) || false
+    }));
+    
+    res.json(formatResponse(true, 'OK', { groups }));
+  } catch (err) {
+    console.error('[Group Broadcast] Failed to fetch groups:', err);
+    res.status(500).json(formatResponse(false, 'Failed to fetch groups: ' + err.message));
+  }
+});
