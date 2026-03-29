@@ -141,4 +141,19 @@ router.get('/categories', protect, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+/**
+ * GET /api/finance/expenses/summary
+ * Get expense summary for the last X days
+ */
+router.get('/expenses/summary', protect, async (req, res, next) => {
+  try {
+    const { days = 30 } = req.query;
+    const { getExpenseSummary } = require('../services/expenseService');
+    const summary = await getExpenseSummary(req.user._id, parseInt(days));
+    res.json(formatResponse(true, 'OK', { summary }));
+  } catch (err) {
+    next(err);
+  }
+});
+
 module.exports = router;

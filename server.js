@@ -102,6 +102,7 @@ app.use('/api/broadcast',  require('./src/routes/broadcast'));
 app.use('/api/auto-reply', require('./src/routes/autoReply'));
 app.use('/api/analytics',  require('./src/routes/analytics'));
 app.use('/api/webhook',    require('./src/routes/webhook'));
+app.use('/api/contracts',   require('./src/routes/contracts'));
 // ── New feature routes ────────────────────────────────────────────────────────
 app.use('/api/schedule',   require('./src/routes/schedule'));
 app.use('/api/invoices',   require('./src/routes/invoices'));

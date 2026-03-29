@@ -28,6 +28,7 @@ const fs = require('fs');
 const QRCode = require('qrcode');
 
 const User = require('../models/User');
+const { createExpenseFromMessage } = require('../services/expenseService');
 const { generateInvoiceFromMessage } = require('../services/invoiceService');
 const Contact = require('../models/Contact');
 const { saveSession, getSession, revokeSession } = require('../services/sessionService');
@@ -458,6 +459,37 @@ async function createSession(userId, io, forceNew = false) {
                   await sock.sendMessage(jid, { text: `❌ ${result.message}` });
                 }, 800);
               }
+            }
+          }
+          
+                    // 9. Auto-create expense from message
+          // Format: "expense 5000 for Facebook Ads" or "expense 2000 Transport"
+          const expenseMatch = text.match(/expense\s+(\d+(?:\.\d+)?)\s+(.+)/i);
+          if (expenseMatch) {
+            const amount = parseFloat(expenseMatch[1]);
+            const description = expenseMatch[2].trim();
+            
+            const expense = await createExpenseFromMessage(userId, phone, amount, description);
+            if (expense) {
+              setTimeout(async () => {
+                try {
+                  const expenseMessage = `💰 *EXPENSE RECORDED* 💰\n\n` +
+                    `Amount: ₦${amount.toLocaleString()}\n` +
+                    `Description: ${description}\n` +
+                    `Category: ${expense.category}\n` +
+                    `Date: ${new Date().toLocaleDateString()}\n\n` +
+                    `_Expense has been added to your finance ledger._`;
+                  
+                  await sock.sendMessage(jid, { text: expenseMessage });
+                  await Message.create({
+                    userId, contactId: contact._id, phone,
+                    direction: 'outbound', body: expenseMessage,
+                    status: 'sent', timestamp: new Date(),
+                  });
+                } catch (e) {
+                  console.error('[WA] Expense confirmation error:', e.message);
+                }
+              }, 800);
             }
           }
 

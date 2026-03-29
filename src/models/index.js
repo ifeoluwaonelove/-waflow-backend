@@ -344,6 +344,30 @@ sessionSchema.index({ userId: 1, whatsappNumber: 1 }, { unique: true });
 sessionSchema.index({ lastUsed: -1 });
 sessionSchema.index({ status: 1 });
 
+// ── Contract ─────────────────────────────────────────────────────────────────
+const contractSchema = new mongoose.Schema({
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  title: { type: String, required: true },
+  content: { type: String, required: true },
+  status: { type: String, enum: ['draft', 'sent', 'signed', 'expired', 'rejected'], default: 'draft' },
+  recipientName: { type: String, required: true },
+  recipientPhone: { type: String, required: true },
+  recipientWhatsappId: { type: String },
+  signedAt: { type: Date, default: null },
+  signatureData: {
+    ipHash: { type: String },
+    userAgent: { type: String },
+    timestamp: { type: Date }
+  },
+  contractNumber: { type: String, unique: true },
+  expiresAt: { type: Date, default: () => new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) }, // 30 days
+  signedPdf: { type: String },
+  notes: { type: String }
+}, { timestamps: true });
+
+contractSchema.index({ userId: 1, contractNumber: 1 });
+contractSchema.index({ userId: 1, status: 1 });
+
 // ── Exports ───────────────────────────────────────────────────────────────────
 module.exports = {
   User:               mongoose.model('User',               userSchema),
@@ -362,4 +386,5 @@ module.exports = {
   UserSettings:       mongoose.model('UserSettings',       userSettingsSchema),
   GroupMember:        mongoose.model('GroupMember',        groupMemberSchema),
   Session:            mongoose.model('Session',            sessionSchema),
+    Contract: mongoose.model('Contract', contractSchema),
 };
