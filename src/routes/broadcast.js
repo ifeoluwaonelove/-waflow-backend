@@ -21,6 +21,99 @@ router.get('/', protect, async (req, res) => {
     version: '1.0.0'
   }));
 });
+/**
+ * GET /api/broadcast/list
+ * Get all broadcasts for the authenticated user
+ */
+router.get('/list', protect, async (req, res, next) => {
+  try {
+    const { status, page = 1, limit = 50 } = req.query;
+    const userId = req.user._id;
+    
+    let query = { userId };
+    if (status) query.status = status;
+    
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const pageLimit = parseInt(limit);
+    
+    const [broadcasts, total] = await Promise.all([
+      Broadcast.find(query)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(pageLimit),
+      Broadcast.countDocuments(query)
+    ]);
+    
+    res.json(formatResponse(true, 'OK', {
+      broadcasts,
+      total,
+      page: parseInt(page),
+      totalPages: Math.ceil(total / pageLimit)
+    }));
+  } catch (err) {
+    console.error('[Broadcast] List error:', err);
+    next(err);
+  }
+});
+/**
+ * GET /api/broadcast/:id
+ * Get a single broadcast by ID
+ */
+router.get('/:id', protect, async (req, res, next) => {
+  try {
+    const broadcast = await Broadcast.findOne({
+      _id: req.params.id,
+      userId: req.user._id
+    });
+    
+    if (!broadcast) {
+      return res.status(404).json(formatResponse(false, 'Broadcast not found'));
+    }
+    
+    res.json(formatResponse(true, 'OK', { broadcast }));
+  } catch (err) {
+    console.error('[Broadcast] Get single error:', err);
+    next(err);
+  }
+});
+/**
+ * POST /api/broadcast
+ * Create a new broadcast
+ */
+router.post('/', protect, async (req, res, next) => {
+  try {
+    const { title, messages, targetType, targetGroup, targetTags, targetContacts, scheduledAt, delayBetweenMessages } = req.body;
+    const userId = req.user._id;
+    
+    if (!title) {
+      return res.status(400).json(formatResponse(false, 'Broadcast title is required'));
+    }
+    
+    if (!messages || !Array.isArray(messages) || messages.length === 0) {
+      return res.status(400).json(formatResponse(false, 'At least one message is required'));
+    }
+    
+    const broadcast = new Broadcast({
+      userId,
+      title,
+      messages,
+      targetType: targetType || 'all',
+      targetGroup,
+      targetTags,
+      targetContacts,
+      scheduledAt: scheduledAt || null,
+      delayBetweenMessages: delayBetweenMessages || 2000,
+      status: scheduledAt ? 'scheduled' : 'draft'
+    });
+    
+    await broadcast.save();
+    
+    res.json(formatResponse(true, 'Broadcast created successfully', { broadcast }));
+  } catch (err) {
+    console.error('[Broadcast] Create error:', err);
+    next(err);
+  }
+});
 
 // ============ SELECTIVE BROADCASTING ROUTES ============
 
