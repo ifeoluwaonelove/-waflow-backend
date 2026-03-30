@@ -75,38 +75,27 @@ router.get('/deleted-messages', protect, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 /**
- * POST /api/whatsapp/cleanup
- * Clean up WhatsApp session files for current user
+ * POST /api/whatsapp/reset
+ * Force reset WhatsApp connection
  */
-router.post('/cleanup', protect, async (req, res, next) => {
+router.post('/reset', protect, async (req, res, next) => {
   try {
+    const userId = req.user._id.toString();
     const fs = require('fs');
     const path = require('path');
-    const userId = req.user._id.toString();
-    
-    // Session path for this user
     const sessionsDir = path.join(__dirname, '../../sessions');
     const userSessionPath = path.join(sessionsDir, `user_${userId}`);
     
-    let cleaned = false;
-    
     if (fs.existsSync(userSessionPath)) {
-      try {
-        fs.rmSync(userSessionPath, { recursive: true, force: true });
-        cleaned = true;
-        console.log(`[WhatsApp] Cleaned session for user ${userId}`);
-      } catch (err) {
-        console.error(`[WhatsApp] Failed to clean session:`, err.message);
-      }
+      fs.rmSync(userSessionPath, { recursive: true, force: true });
     }
     
-    // Also disconnect from memory
     const { disconnectSession } = require('../whatsapp/engine');
     await disconnectSession(userId);
     
-    res.json(formatResponse(true, cleaned ? 'Session cleaned successfully' : 'No session found to clean'));
+    res.json(formatResponse(true, 'WhatsApp reset complete. Please try connecting again.'));
   } catch (err) {
-    console.error('[WhatsApp] Cleanup error:', err);
+    console.error('[WhatsApp] Reset error:', err);
     next(err);
   }
 });

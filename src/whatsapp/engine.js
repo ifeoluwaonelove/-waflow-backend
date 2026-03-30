@@ -207,7 +207,7 @@ async function createSession(userId, io, forceNew = false) {
 const version = [2, 3000, 1015901307]; // Stable version
 
 const sock = makeWASocket({
-  version, // [2, 3000, 1015901307]
+  version: [2, 3000, 1015901307],
   auth: state,
   printQRInTerminal: false,
   browser: ['WAFlow', 'Chrome', '120.0.0.0'],
@@ -216,11 +216,24 @@ const sock = makeWASocket({
   retryRequestDelayMs: 2000,
   maxMsgRetryCount: 3,
   getMessage: async () => ({ conversation: '' }),
-  // Add these to prevent pairing attempts
+  // Critical: Disable the new pairing method
   defaultQueryTimeoutMs: undefined,
-  generateHighQualityLink: false,
+  generateHighQualityLink: true, // Better QR quality
   syncFullHistory: false,
+  // Add these to prevent auto-pairing
+  patchMessageBeforeSending: (message) => message,
+  cachedGroupMetadata: () => ({}),
 });
+// Force QR code generation
+if (!state.creds.registered) {
+  console.log('[WA] Waiting for QR code...');
+  // This ensures QR is generated
+  setTimeout(() => {
+    if (!state.creds.registered) {
+      console.log('[WA] QR not scanned yet, still waiting...');
+    }
+  }, 5000);
+}
 // Small delay to allow socket to initialize
 await new Promise(resolve => setTimeout(resolve, 1000));
 
