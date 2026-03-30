@@ -264,10 +264,54 @@ async function createSession(userId, io, forceNew = false) {
           console.log(`[WA] User ${userId} connected — ${pushName || phone}`);
         }
 
-        if (connection === 'close') {
-          sessions.delete(userId);
-          const code = lastDisconnect?.error?.output?.statusCode;
-          const loggedOut = code === DisconnectReason.loggedOut;
+      if (connection === 'close') {
+  sessions.delete(userId);
+  const code = lastDisconnect?.error?.output?.statusCode;
+  const loggedOut = code === DisconnectReason.loggedOut;
+  
+  // Handle stream error 515 (common pairing error)
+  if (code === 515) {
+    console.log(`[WA] Stream error 515 for user ${userId} - cleaning session`);
+    
+    // Clear session files
+    const sPath = sessionPath(userId);
+    if (fs.existsSync(sPath)) {
+      try { 
+        fs.rmSync(sPath, { recursive: true, force: true }); 
+        console.log(`[WA] Deleted session folder for user ${userId}`);
+      } catch (e) { 
+        console.error(`[WA] Failed to delete session:`, e.message);
+      }
+    }
+    
+    // Update user status
+    await User.findByIdAndUpdate(userId, { 
+      whatsappConnected: false, 
+      whatsappPhone: null,
+      whatsappName: null,
+      whatsappPushName: null
+    });
+    
+    // Notify frontend
+    io.to(`user-${userId}`).emit('whatsapp:disconnected', { reason: 'stream_error' });
+    console.log(`[WA] User ${userId} disconnected due to stream error`);
+    return; // Don't retry automatically
+  }
+
+  if (loggedOut) {
+    // Full logout — clean files and update DB
+    await User.findByIdAndUpdate(userId, { whatsappConnected: false, whatsappPhone: null });
+    io.to(`user-${userId}`).emit('whatsapp:disconnected', { reason: 'logged_out' });
+    try { fs.rmSync(sPath, { recursive: true, force: true }); } catch (_) {}
+    console.log(`[WA] User ${userId} logged out`);
+  } else {
+    // Network error — schedule reconnect
+    io.to(`user-${userId}`).emit('whatsapp:reconnecting', {});
+    console.log(`[WA] User ${userId} disconnected (code ${code}) — reconnecting in 5s`);
+    const timer = setTimeout(() => createSession(userId, io), 5000);
+    reconnectTimers.set(userId, timer);
+  }
+}
 
           if (loggedOut) {
             // Full logout — clean files and update DB

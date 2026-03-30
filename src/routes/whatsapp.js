@@ -74,5 +74,41 @@ router.get('/deleted-messages', protect, async (req, res, next) => {
     res.json(formatResponse(true, 'OK', { messages }));
   } catch (err) { next(err); }
 });
+/**
+ * POST /api/whatsapp/cleanup
+ * Clean up WhatsApp session files for current user
+ */
+router.post('/cleanup', protect, async (req, res, next) => {
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    const userId = req.user._id.toString();
+    
+    // Session path for this user
+    const sessionsDir = path.join(__dirname, '../../sessions');
+    const userSessionPath = path.join(sessionsDir, `user_${userId}`);
+    
+    let cleaned = false;
+    
+    if (fs.existsSync(userSessionPath)) {
+      try {
+        fs.rmSync(userSessionPath, { recursive: true, force: true });
+        cleaned = true;
+        console.log(`[WhatsApp] Cleaned session for user ${userId}`);
+      } catch (err) {
+        console.error(`[WhatsApp] Failed to clean session:`, err.message);
+      }
+    }
+    
+    // Also disconnect from memory
+    const { disconnectSession } = require('../whatsapp/engine');
+    await disconnectSession(userId);
+    
+    res.json(formatResponse(true, cleaned ? 'Session cleaned successfully' : 'No session found to clean'));
+  } catch (err) {
+    console.error('[WhatsApp] Cleanup error:', err);
+    next(err);
+  }
+});
 
 module.exports = router;
