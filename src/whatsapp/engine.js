@@ -206,21 +206,27 @@ async function createSession(userId, io, forceNew = false) {
     const { state, saveCreds } = await useMultiFileAuthState(sPath);
     const { version } = await fetchLatestBaileysVersion();
 
-    const sock = makeWASocket({
-      version,
-      auth: state,
-      printQRInTerminal: false,
-      browser: ['WAFlow', 'Chrome', '120.0.0.0'],
-      connectTimeoutMs: 30000,
-      keepAliveIntervalMs: 15000,
-      retryRequestDelayMs: 2000,
-      maxMsgRetryCount: 3,
-      getMessage: async () => ({ conversation: '' }),
-    });
+  const sock = makeWASocket({
+  version: [2, 3000, 1015901307], // Use a stable version
+  auth: state,
+  printQRInTerminal: false,
+  browser: ['WAFlow', 'Chrome', '120.0.0.0'],
+  connectTimeoutMs: 60000,
+  keepAliveIntervalMs: 15000,
+  retryRequestDelayMs: 2000,
+  maxMsgRetryCount: 3,
+  getMessage: async () => ({ conversation: '' }),
+  // Disable the new pairing method
+  defaultQueryTimeoutMs: undefined,
+  // This is important - force QR code
+  syncFullHistory: false,
+});
+// Small delay to allow socket to initialize
+await new Promise(resolve => setTimeout(resolve, 1000));
 
     sessions.set(userId, sock);
 
-      // ── Connection state updates ──────────────────────────────────────────────
+          // ── Connection state updates ──────────────────────────────────────────────
     sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
       try {
         if (qr) {
@@ -231,23 +237,6 @@ async function createSession(userId, io, forceNew = false) {
         if (connection === 'open') {
           const phone    = sock.user?.id ? jidToPhone(sock.user.id) : null;
           const pushName = sock.user?.name || null;
-          
-          // Check if we already have a session record
-          if (phone && userId) {
-            const existingSession = await getSession(userId, phone);
-            if (!existingSession) {
-              // Create initial session record
-              const { state } = await useMultiFileAuthState(sPath);
-              await saveSession(userId, phone, state.creds || {}, {
-                platform: process.platform,
-                browser: 'WAFlow',
-                version: require('../../package.json').version
-              });
-              console.log(`[Session] Created initial session for ${phone}`);
-            } else {
-              console.log(`[Session] Using existing session for ${phone}`);
-            }
-          }
           
           await User.findByIdAndUpdate(userId, {
             whatsappConnected:   true,
@@ -264,58 +253,36 @@ async function createSession(userId, io, forceNew = false) {
           console.log(`[WA] User ${userId} connected — ${pushName || phone}`);
         }
 
-        if (connection === 'close') {
-          sessions.delete(userId);
-          const code = lastDisconnect?.error?.output?.statusCode;
-          const loggedOut = code === DisconnectReason.loggedOut;
-          const sessionPathUser = sessionPath(userId);
-          
-          // Handle stream error 515 (common pairing error)
-          if (code === 515) {
-            console.log(`[WA] Stream error 515 for user ${userId} - cleaning session`);
-            
-            // Clear session files
-            if (fs.existsSync(sessionPathUser)) {
-              try { 
-                fs.rmSync(sessionPathUser, { recursive: true, force: true }); 
-                console.log(`[WA] Deleted session folder for user ${userId}`);
-              } catch (e) { 
-                console.error(`[WA] Failed to delete session:`, e.message);
-              }
-            }
-            
-            // Update user status
-            await User.findByIdAndUpdate(userId, { 
-              whatsappConnected: false, 
-              whatsappPhone: null,
-              whatsappName: null,
-              whatsappPushName: null
-            });
-            
-            // Notify frontend
-            io.to(`user-${userId}`).emit('whatsapp:disconnected', { reason: 'stream_error' });
-            console.log(`[WA] User ${userId} disconnected due to stream error`);
-            return; // Don't retry automatically
-          }
+if (connection === 'close') {
+  sessions.delete(userId);
+  const code = lastDisconnect?.error?.output?.statusCode;
+  const loggedOut = code === DisconnectReason.loggedOut;
 
-          if (loggedOut) {
-            // Full logout — clean files and update DB
-            await User.findByIdAndUpdate(userId, { whatsappConnected: false, whatsappPhone: null });
-            io.to(`user-${userId}`).emit('whatsapp:disconnected', { reason: 'logged_out' });
-            try { 
-              fs.rmSync(sessionPathUser, { recursive: true, force: true }); 
-            } catch (e) {
-              console.error(`[WA] Failed to delete session on logout:`, e.message);
-            }
-            console.log(`[WA] User ${userId} logged out`);
-          } else if (code !== 515) {
-            // Network error — schedule reconnect (skip for 515 since we already handled it)
-            io.to(`user-${userId}`).emit('whatsapp:reconnecting', {});
-            console.log(`[WA] User ${userId} disconnected (code ${code}) — reconnecting in 5s`);
-            const timer = setTimeout(() => createSession(userId, io), 5000);
-            reconnectTimers.set(userId, timer);
-          }
-        }
+  // Don't retry on 515 errors
+  if (code === 515) {
+    console.log(`[WA] Stream error 515 for user ${userId} - not retrying automatically`);
+    await User.findByIdAndUpdate(userId, { 
+      whatsappConnected: false, 
+      whatsappPhone: null,
+      whatsappName: null,
+      whatsappPushName: null
+    });
+    io.to(`user-${userId}`).emit('whatsapp:disconnected', { reason: 'stream_error' });
+    return;
+  }
+
+  if (loggedOut) {
+    await User.findByIdAndUpdate(userId, { whatsappConnected: false, whatsappPhone: null });
+    io.to(`user-${userId}`).emit('whatsapp:disconnected', { reason: 'logged_out' });
+    try { fs.rmSync(sPath, { recursive: true }); } catch (_) {}
+    console.log(`[WA] User ${userId} logged out`);
+  } else {
+    io.to(`user-${userId}`).emit('whatsapp:reconnecting', {});
+    console.log(`[WA] User ${userId} disconnected (code ${code}) — reconnecting in 5s`);
+    const timer = setTimeout(() => createSession(userId, io), 5000);
+    reconnectTimers.set(userId, timer);
+  }
+}
       } catch (err) {
         console.error('[WA] connection.update handler error:', err.message);
       }
