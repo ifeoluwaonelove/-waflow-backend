@@ -216,24 +216,17 @@ const sock = makeWASocket({
   retryRequestDelayMs: 2000,
   maxMsgRetryCount: 3,
   getMessage: async () => ({ conversation: '' }),
-  // Critical: Disable the new pairing method
+  // CRITICAL: Disable the new pairing method
   defaultQueryTimeoutMs: undefined,
-  generateHighQualityLink: true, // Better QR quality
+  generateHighQualityLink: true,
   syncFullHistory: false,
-  // Add these to prevent auto-pairing
+  // This prevents the pairing attempt
   patchMessageBeforeSending: (message) => message,
-  cachedGroupMetadata: () => ({}),
+  // Force QR code generation
+  authState: state,
+  // Use QR code only
+  printQRInTerminal: true, // This forces QR generation
 });
-// Force QR code generation
-if (!state.creds.registered) {
-  console.log('[WA] Waiting for QR code...');
-  // This ensures QR is generated
-  setTimeout(() => {
-    if (!state.creds.registered) {
-      console.log('[WA] QR not scanned yet, still waiting...');
-    }
-  }, 5000);
-}
 // Small delay to allow socket to initialize
 await new Promise(resolve => setTimeout(resolve, 1000));
 
@@ -242,10 +235,17 @@ await new Promise(resolve => setTimeout(resolve, 1000));
           // ── Connection state updates ──────────────────────────────────────────────
     sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
       try {
-        if (qr) {
-          const qrDataUrl = await QRCode.toDataURL(qr, { width: 256 });
-          io.to(`user-${userId}`).emit('whatsapp:qr', { qr: qrDataUrl });
-        }
+        // Force QR code generation by checking if not registered
+if (!state.creds.registered) {
+  console.log('[WA] Waiting for QR code scan...');
+  // Emit a message that we're waiting for QR
+  io.to(`user-${userId}`).emit('whatsapp:waiting_qr', { message: 'Waiting for QR code...' });
+}
+       if (qr) {
+  const qrDataUrl = await QRCode.toDataURL(qr, { width: 256 });
+  console.log('[WA] QR code generated, sending to frontend');
+  io.to(`user-${userId}`).emit('whatsapp:qr', { qr: qrDataUrl });
+}
 
         if (connection === 'open') {
           const phone    = sock.user?.id ? jidToPhone(sock.user.id) : null;
