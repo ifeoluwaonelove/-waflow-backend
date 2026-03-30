@@ -270,33 +270,33 @@ async function createSession(userId, io, forceNew = false) {
   const loggedOut = code === DisconnectReason.loggedOut;
   
   // Handle stream error 515 (common pairing error)
-  if (code === 515) {
-    console.log(`[WA] Stream error 515 for user ${userId} - cleaning session`);
-    
-    // Clear session files
-    const sPath = sessionPath(userId);
-    if (fs.existsSync(sPath)) {
-      try { 
-        fs.rmSync(sPath, { recursive: true, force: true }); 
-        console.log(`[WA] Deleted session folder for user ${userId}`);
-      } catch (e) { 
-        console.error(`[WA] Failed to delete session:`, e.message);
-      }
+if (code === 515) {
+  console.log(`[WA] Stream error 515 for user ${userId} - cleaning session`);
+  
+  // Clear session files
+  const sPath = sessionPath(userId);
+  if (fs.existsSync(sPath)) {
+    try { 
+      fs.rmSync(sPath, { recursive: true, force: true }); 
+      console.log(`[WA] Deleted session folder for user ${userId}`);
+    } catch (e) { 
+      console.error(`[WA] Failed to delete session:`, e.message);
     }
-    
-    // Update user status
-    await User.findByIdAndUpdate(userId, { 
-      whatsappConnected: false, 
-      whatsappPhone: null,
-      whatsappName: null,
-      whatsappPushName: null
-    });
-    
-    // Notify frontend
-    io.to(`user-${userId}`).emit('whatsapp:disconnected', { reason: 'stream_error' });
-    console.log(`[WA] User ${userId} disconnected due to stream error`);
-    return; // Don't retry automatically
   }
+  
+  // Update user status
+  await User.findByIdAndUpdate(userId, { 
+    whatsappConnected: false, 
+    whatsappPhone: null,
+    whatsappName: null,
+    whatsappPushName: null
+  });
+  
+  // Notify frontend
+  io.to(`user-${userId}`).emit('whatsapp:disconnected', { reason: 'stream_error' });
+  console.log(`[WA] User ${userId} disconnected due to stream error`);
+  return; // Don't retry automatically
+}
 
   if (loggedOut) {
     // Full logout — clean files and update DB
