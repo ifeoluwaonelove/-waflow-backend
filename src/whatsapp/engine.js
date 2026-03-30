@@ -197,14 +197,14 @@ async function createSessionWithPairing(userId, phoneNumber, io) {
     
     sessions.set(userId, sock);
     
-    if (!state.creds.registered) {
-      console.log(`[WA] Requesting pairing code for ${phoneNumber}...`);
-      const code = await sock.requestPairingCode(phoneNumber);
-      console.log(`[WA] Pairing code: ${code}`);
-      io.to(`user-${userId}`).emit('whatsapp:pairing_code', { code });
-    }
-    
-    sock.ev.on('connection.update', async ({ connection, lastDisconnect }) => {
+    // Listen for QR and pairing code
+    sock.ev.on('connection.update', async ({ qr, connection, lastDisconnect }) => {
+      if (qr) {
+        console.log('[WA] QR code generated as backup');
+        const qrDataUrl = await QRCode.toDataURL(qr, { width: 256 });
+        io.to(`user-${userId}`).emit('whatsapp:qr', { qr: qrDataUrl });
+      }
+      
       if (connection === 'open') {
         const phone = sock.user?.id ? jidToPhone(sock.user.id) : null;
         const pushName = sock.user?.name || null;
@@ -232,96 +232,22 @@ async function createSessionWithPairing(userId, phoneNumber, io) {
     
     sock.ev.on('creds.update', saveCreds);
     
+    // Request pairing code
+    if (!state.creds.registered) {
+      console.log(`[WA] Requesting pairing code for ${phoneNumber}...`);
+      try {
+        const code = await sock.requestPairingCode(phoneNumber);
+        console.log(`[WA] Pairing code: ${code}`);
+        io.to(`user-${userId}`).emit('whatsapp:pairing_code', { code });
+      } catch (err) {
+        console.error('[WA] Failed to get pairing code:', err);
+      }
+    }
+    
     return sock;
   } catch (err) {
     console.error(`[WA] Pairing error for user ${userId}:`, err.message);
     throw err;
-  }
-}
-
-// ── QR CODE METHOD (OLD - KEPT FOR BACKUP) ───────────────────────────────────
-async function createSession(userId, io, forceNew = false) {
-  if (reconnectTimers.has(userId)) {
-    clearTimeout(reconnectTimers.get(userId));
-    reconnectTimers.delete(userId);
-  }
-
-  if (forceNew && sessions.has(userId)) {
-    try { sessions.get(userId).end(); } catch (_) {}
-    sessions.delete(userId);
-  }
-
-  if (sessions.has(userId) && !forceNew) {
-    return sessions.get(userId);
-  }
-
-  const sPath = sessionPath(userId);
-  if (!fs.existsSync(sPath)) fs.mkdirSync(sPath, { recursive: true });
-
-  try {
-    const { state, saveCreds } = await useMultiFileAuthState(sPath);
-    const { version } = await fetchLatestBaileysVersion();
-
-    const sock = makeWASocket({
-      version,
-      auth: state,
-      browser: ['WAFlow', 'Chrome', '120.0.0.0'],
-      connectTimeoutMs: 60000,
-      keepAliveIntervalMs: 15000,
-      retryRequestDelayMs: 2000,
-      maxMsgRetryCount: 3,
-      getMessage: async () => ({ conversation: '' }),
-    });
-
-    sessions.set(userId, sock);
-
-    sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
-      if (qr) {
-        const qrDataUrl = await QRCode.toDataURL(qr, { width: 256 });
-        io.to(`user-${userId}`).emit('whatsapp:qr', { qr: qrDataUrl });
-      }
-
-      if (connection === 'open') {
-        const phone = sock.user?.id ? jidToPhone(sock.user.id) : null;
-        const pushName = sock.user?.name || null;
-        
-        await User.findByIdAndUpdate(userId, {
-          whatsappConnected: true,
-          whatsappPhone: phone,
-          whatsappName: pushName,
-          whatsappPushName: pushName,
-          whatsappSessionPath: sPath,
-        });
-        io.to(`user-${userId}`).emit('whatsapp:connected', { phone, name: pushName });
-        console.log(`[WA] User ${userId} connected — ${pushName || phone}`);
-      }
-
-      if (connection === 'close') {
-        sessions.delete(userId);
-        const code = lastDisconnect?.error?.output?.statusCode;
-        const loggedOut = code === DisconnectReason.loggedOut;
-
-        if (loggedOut) {
-          await User.findByIdAndUpdate(userId, { whatsappConnected: false, whatsappPhone: null });
-          io.to(`user-${userId}`).emit('whatsapp:disconnected', { reason: 'logged_out' });
-          try { fs.rmSync(sPath, { recursive: true }); } catch (_) {}
-          console.log(`[WA] User ${userId} logged out`);
-        } else {
-          io.to(`user-${userId}`).emit('whatsapp:reconnecting', {});
-          console.log(`[WA] User ${userId} disconnected — reconnecting in 5s`);
-          const timer = setTimeout(() => createSession(userId, io), 5000);
-          reconnectTimers.set(userId, timer);
-        }
-      }
-    });
-
-    sock.ev.on('creds.update', saveCreds);
-
-    return sock;
-  } catch (err) {
-    console.error(`[WA] createSession error for user ${userId}:`, err.message);
-    const timer = setTimeout(() => createSession(userId, io), 8000);
-    reconnectTimers.set(userId, timer);
   }
 }
 
@@ -418,6 +344,92 @@ async function getAllGroupMembers(userId, groupId) {
   } catch (err) {
     console.error('[Group Extract] Error:', err);
     throw err;
+  }
+}
+
+// ── QR CODE METHOD (BACKUP) ───────────────────────────────────────────────────
+async function createSession(userId, io, forceNew = false) {
+  if (reconnectTimers.has(userId)) {
+    clearTimeout(reconnectTimers.get(userId));
+    reconnectTimers.delete(userId);
+  }
+
+  if (forceNew && sessions.has(userId)) {
+    try { sessions.get(userId).end(); } catch (_) {}
+    sessions.delete(userId);
+  }
+
+  if (sessions.has(userId) && !forceNew) {
+    return sessions.get(userId);
+  }
+
+  const sPath = sessionPath(userId);
+  if (!fs.existsSync(sPath)) fs.mkdirSync(sPath, { recursive: true });
+
+  try {
+    const { state, saveCreds } = await useMultiFileAuthState(sPath);
+    const { version } = await fetchLatestBaileysVersion();
+
+    const sock = makeWASocket({
+      version,
+      auth: state,
+      browser: ['WAFlow', 'Chrome', '120.0.0.0'],
+      connectTimeoutMs: 60000,
+      keepAliveIntervalMs: 15000,
+      retryRequestDelayMs: 2000,
+      maxMsgRetryCount: 3,
+      getMessage: async () => ({ conversation: '' }),
+    });
+
+    sessions.set(userId, sock);
+
+    sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
+      if (qr) {
+        const qrDataUrl = await QRCode.toDataURL(qr, { width: 256 });
+        io.to(`user-${userId}`).emit('whatsapp:qr', { qr: qrDataUrl });
+      }
+
+      if (connection === 'open') {
+        const phone = sock.user?.id ? jidToPhone(sock.user.id) : null;
+        const pushName = sock.user?.name || null;
+        
+        await User.findByIdAndUpdate(userId, {
+          whatsappConnected: true,
+          whatsappPhone: phone,
+          whatsappName: pushName,
+          whatsappPushName: pushName,
+          whatsappSessionPath: sPath,
+        });
+        io.to(`user-${userId}`).emit('whatsapp:connected', { phone, name: pushName });
+        console.log(`[WA] User ${userId} connected — ${pushName || phone}`);
+      }
+
+      if (connection === 'close') {
+        sessions.delete(userId);
+        const code = lastDisconnect?.error?.output?.statusCode;
+        const loggedOut = code === DisconnectReason.loggedOut;
+
+        if (loggedOut) {
+          await User.findByIdAndUpdate(userId, { whatsappConnected: false, whatsappPhone: null });
+          io.to(`user-${userId}`).emit('whatsapp:disconnected', { reason: 'logged_out' });
+          try { fs.rmSync(sPath, { recursive: true }); } catch (_) {}
+          console.log(`[WA] User ${userId} logged out`);
+        } else {
+          io.to(`user-${userId}`).emit('whatsapp:reconnecting', {});
+          console.log(`[WA] User ${userId} disconnected — reconnecting in 5s`);
+          const timer = setTimeout(() => createSession(userId, io), 5000);
+          reconnectTimers.set(userId, timer);
+        }
+      }
+    });
+
+    sock.ev.on('creds.update', saveCreds);
+
+    return sock;
+  } catch (err) {
+    console.error(`[WA] createSession error for user ${userId}:`, err.message);
+    const timer = setTimeout(() => createSession(userId, io), 8000);
+    reconnectTimers.set(userId, timer);
   }
 }
 
