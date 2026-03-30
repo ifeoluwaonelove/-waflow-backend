@@ -180,7 +180,90 @@ async function detectReferral(userId, phone, text) {
     console.error('[WA] detectReferral error:', err.message);
   }
 }
+/**
+ * Create session using pairing code (new WhatsApp method)
+ */
+async function createSessionWithPairing(userId, phoneNumber, io) {
+  // Clear any existing session
+  if (sessions.has(userId)) {
+    try { sessions.get(userId).end(); } catch (_) {}
+    sessions.delete(userId);
+  }
+  
+  const sPath = sessionPath(userId);
+  // Clear old session folder
+  if (fs.existsSync(sPath)) {
+    fs.rmSync(sPath, { recursive: true, force: true });
+  }
+  fs.mkdirSync(sPath, { recursive: true });
+  
+  try {
+    const { state, saveCreds } = await useMultiFileAuthState(sPath);
+    const { version } = await fetchLatestBaileysVersion();
+    
+    const sock = makeWASocket({
+      version,
+      auth: state,
+      browser: ['WAFlow', 'Chrome', '120.0.0.0'],
+      connectTimeoutMs: 60000,
+      keepAliveIntervalMs: 15000,
+      retryRequestDelayMs: 2000,
+      maxMsgRetryCount: 3,
+      getMessage: async () => ({ conversation: '' }),
+    });
+    
+    sessions.set(userId, sock);
+    
+    // Request pairing code
+    if (!state.creds.registered) {
+      console.log(`[WA] Requesting pairing code for ${phoneNumber}...`);
+      const code = await sock.requestPairingCode(phoneNumber);
+      console.log(`[WA] Pairing code: ${code}`);
+      
+      // Send code to frontend via socket
+      io.to(`user-${userId}`).emit('whatsapp:pairing_code', { code });
+    }
+    
+    // Handle connection updates
+    sock.ev.on('connection.update', async ({ connection, lastDisconnect }) => {
+      if (connection === 'open') {
+        const phone = sock.user?.id ? jidToPhone(sock.user.id) : null;
+        const pushName = sock.user?.name || null;
+        
+        await User.findByIdAndUpdate(userId, {
+          whatsappConnected: true,
+          whatsappPhone: phone,
+          whatsappName: pushName,
+          whatsappPushName: pushName,
+          whatsappSessionPath: sPath,
+        });
+        
+        io.to(`user-${userId}`).emit('whatsapp:connected', { phone, name: pushName });
+        console.log(`[WA] User ${userId} connected — ${pushName || phone}`);
+      }
+      
+      if (connection === 'close') {
+        sessions.delete(userId);
+        const code = lastDisconnect?.error?.output?.statusCode;
+        if (code !== DisconnectReason.loggedOut) {
+          console.log(`[WA] Disconnected, code: ${code}`);
+        }
+      }
+    });
+    
+    sock.ev.on('creds.update', saveCreds);
+    
+    return sock;
+  } catch (err) {
+    console.error(`[WA] Pairing error for user ${userId}:`, err.message);
+    throw err;
+  }
+}
 
+// ── Core: create / restore a session (QR method) ─────────────────────────────────────────
+async function createSession(userId, io, forceNew = false) {
+  // ... rest of your existing createSession code
+  
 // ── Core: create / restore a session ─────────────────────────────────────────
 async function createSession(userId, io, forceNew = false) {
   // Clear any pending reconnect timer
@@ -646,4 +729,4 @@ async function getAllGroupMembers(userId, groupId) {
   }
 }
 
-module.exports = { createSession, disconnectSession, sendMessage, initWhatsApp, sessions, getAllGroupMembers };
+module.exports = { createSession, createSessionWithPairing, disconnectSession, sendMessage, initWhatsApp, sessions, getAllGroupMembers };

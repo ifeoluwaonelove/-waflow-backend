@@ -101,5 +101,29 @@ router.post('/force-reset', protect, async (req, res, next) => {
     next(err);
   }
 });
+/**
+ * POST /api/whatsapp/pair
+ * Pair WhatsApp using phone number (8-digit code)
+ */
+router.post('/pair', protect, async (req, res, next) => {
+  try {
+    const { phoneNumber } = req.body;
+    if (!phoneNumber) {
+      return res.status(400).json(formatResponse(false, 'Phone number required'));
+    }
+    
+    const io = req.app.get('io');
+    const userId = req.user._id.toString();
+    
+    // Create session with pairing
+    const { createSessionWithPairing } = require('../whatsapp/engine');
+    await createSessionWithPairing(userId, phoneNumber, io);
+    
+    res.json(formatResponse(true, 'Pairing code requested. Check WhatsApp for the code.'));
+  } catch (err) { 
+    console.error('[WhatsApp] Pairing error:', err);
+    next(err); 
+  }
+});
 
 module.exports = router;
