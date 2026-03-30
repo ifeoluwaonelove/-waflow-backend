@@ -204,10 +204,10 @@ async function createSession(userId, io, forceNew = false) {
 
   try {
     const { state, saveCreds } = await useMultiFileAuthState(sPath);
-    const { version } = await fetchLatestBaileysVersion();
+const version = [2, 3000, 1015901307]; // Stable version
 
-  const sock = makeWASocket({
-  version: [2, 3000, 1015901307], // Use a stable version
+const sock = makeWASocket({
+  version, // [2, 3000, 1015901307]
   auth: state,
   printQRInTerminal: false,
   browser: ['WAFlow', 'Chrome', '120.0.0.0'],
@@ -216,9 +216,9 @@ async function createSession(userId, io, forceNew = false) {
   retryRequestDelayMs: 2000,
   maxMsgRetryCount: 3,
   getMessage: async () => ({ conversation: '' }),
-  // Disable the new pairing method
+  // Add these to prevent pairing attempts
   defaultQueryTimeoutMs: undefined,
-  // This is important - force QR code
+  generateHighQualityLink: false,
   syncFullHistory: false,
 });
 // Small delay to allow socket to initialize
