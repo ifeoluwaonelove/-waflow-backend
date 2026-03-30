@@ -78,24 +78,26 @@ router.get('/deleted-messages', protect, async (req, res, next) => {
  * POST /api/whatsapp/reset
  * Force reset WhatsApp connection
  */
-router.post('/reset', protect, async (req, res, next) => {
+router.post('/force-reset', protect, async (req, res, next) => {
   try {
     const userId = req.user._id.toString();
     const fs = require('fs');
     const path = require('path');
     const sessionsDir = path.join(__dirname, '../../sessions');
-    const userSessionPath = path.join(sessionsDir, `user_${userId}`);
     
-    if (fs.existsSync(userSessionPath)) {
-      fs.rmSync(userSessionPath, { recursive: true, force: true });
+    // Delete ALL sessions (not just user's)
+    if (fs.existsSync(sessionsDir)) {
+      fs.rmSync(sessionsDir, { recursive: true, force: true });
     }
+    fs.mkdirSync(sessionsDir, { recursive: true });
     
+    // Also disconnect
     const { disconnectSession } = require('../whatsapp/engine');
     await disconnectSession(userId);
     
-    res.json(formatResponse(true, 'WhatsApp reset complete. Please try connecting again.'));
+    res.json(formatResponse(true, 'All sessions cleared. Please try connecting again.'));
   } catch (err) {
-    console.error('[WhatsApp] Reset error:', err);
+    console.error('[WhatsApp] Force reset error:', err);
     next(err);
   }
 });
