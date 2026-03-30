@@ -126,4 +126,33 @@ router.post('/pair', protect, async (req, res, next) => {
   }
 });
 
+router.post('/pair', protect, async (req, res, next) => {
+  try {
+    let { phoneNumber } = req.body;
+    
+    // Clean phone number: remove +, spaces, and leading zeros
+    phoneNumber = phoneNumber.replace(/[^0-9]/g, '');
+    if (phoneNumber.startsWith('0')) {
+      phoneNumber = phoneNumber.substring(1);
+    }
+    
+    if (!phoneNumber || phoneNumber.length < 10) {
+      return res.status(400).json(formatResponse(false, 'Invalid phone number. Use format: 2348012345678'));
+    }
+    
+    console.log(`[WhatsApp] Pairing request for: ${phoneNumber}`);
+    
+    const io = req.app.get('io');
+    const userId = req.user._id.toString();
+    
+    const { createSessionWithPairing } = require('../whatsapp/engine');
+    await createSessionWithPairing(userId, phoneNumber, io);
+    
+    res.json(formatResponse(true, 'Pairing code requested. Check your WhatsApp.'));
+  } catch (err) { 
+    console.error('[WhatsApp] Pairing error:', err);
+    next(err); 
+  }
+});
+
 module.exports = router;
