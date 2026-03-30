@@ -209,23 +209,12 @@ const version = [2, 3000, 1015901307]; // Stable version
 const sock = makeWASocket({
   version: [2, 3000, 1015901307],
   auth: state,
-  printQRInTerminal: false,
   browser: ['WAFlow', 'Chrome', '120.0.0.0'],
   connectTimeoutMs: 60000,
   keepAliveIntervalMs: 15000,
   retryRequestDelayMs: 2000,
   maxMsgRetryCount: 3,
   getMessage: async () => ({ conversation: '' }),
-  // CRITICAL: Disable the new pairing method
-  defaultQueryTimeoutMs: undefined,
-  generateHighQualityLink: true,
-  syncFullHistory: false,
-  // This prevents the pairing attempt
-  patchMessageBeforeSending: (message) => message,
-  // Force QR code generation
-  authState: state,
-  // Use QR code only
-  printQRInTerminal: true, // This forces QR generation
 });
 // Small delay to allow socket to initialize
 await new Promise(resolve => setTimeout(resolve, 1000));
@@ -233,15 +222,13 @@ await new Promise(resolve => setTimeout(resolve, 1000));
     sessions.set(userId, sock);
 
           // ── Connection state updates ──────────────────────────────────────────────
-    sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
-      try {
-        // Force QR code generation by checking if not registered
-if (!state.creds.registered) {
-  console.log('[WA] Waiting for QR code scan...');
-  // Emit a message that we're waiting for QR
-  io.to(`user-${userId}`).emit('whatsapp:waiting_qr', { message: 'Waiting for QR code...' });
-}
+sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
+  console.log('[WA] connection.update triggered, connection:', connection, 'hasQR:', !!qr);
+  try {
+        console.log('[WA] Checking for QR in connection.update, qr exists?', !!qr);
+
        if (qr) {
+        console.log('[WA] QR code generated! Length:', qr.length);
   const qrDataUrl = await QRCode.toDataURL(qr, { width: 256 });
   console.log('[WA] QR code generated, sending to frontend');
   io.to(`user-${userId}`).emit('whatsapp:qr', { qr: qrDataUrl });
