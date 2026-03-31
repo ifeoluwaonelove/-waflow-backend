@@ -165,7 +165,7 @@ router.get('/test-message', protect, async (req, res, next) => {
     const testPhone = req.query.phone;
     
     if (!testPhone) {
-      return res.status(400).json(formatResponse(false, 'Phone number required'));
+      return res.status(400).json(formatResponse(false, 'Phone number required. Use: ?phone=234XXXXXXXXX'));
     }
     
     await sendMessage(req.user._id.toString(), testPhone, "✅ Test message from WAFlow! Your WhatsApp is working properly.");
