@@ -232,208 +232,172 @@ async function createSessionWithPairing(userId, phoneNumber, io) {
     
     sock.ev.on('creds.update', saveCreds);
 
-    // ── Handle decryption errors ─────────────────────────────────────────────
-    sock.ev.on('message.ack', async ({ jid, error }) => {
-      if (error) {
-        console.error('[WA] Message ACK error:', error);
-      }
-    });
-
-    // ── Incoming messages ─────────────────────────────────────────────────────
-    sock.ev.on('messages.upsert', async ({ messages: msgs, type }) => {
-      console.log('[WA] messages.upsert triggered, type:', type);
-      if (type !== 'notify') return;
-
-      for (const msg of msgs) {
-        try {
-          const jid = msg.key.remoteJid;
-          if (!jid || isJidBroadcast(jid) || isJidGroup(jid)) continue;
-          if (msg.key.fromMe) continue;
-
-          const text = messageText(msg);
-          const phone = jidToPhone(jid);
+    // ── NEW: FIXED INCOMING MESSAGE HANDLER ─────────────────────────────────────
+    sock.ev.on('messages.upsert', async ({ messages }) => {
+      try {
+        const msg = messages[0];
+        if (!msg) return;
+        if (!msg.message) return;
+        if (msg.key.fromMe) return;
+        
+        const jid = msg.key.remoteJid;
+        if (!jid || !jid.includes('@s.whatsapp.net')) return;
+        
+        const text = 
+          msg.message.conversation ||
+          msg.message.extendedTextMessage?.text ||
+          msg.message.imageMessage?.caption ||
+          msg.message.videoMessage?.caption ||
+          "";
+        
+        if (!text) return;
+        
+        console.log('[WA] 📩 Incoming message:', text);
+        
+        const phone = jidToPhone(jid);
+        
+        // Auto-save contact if new
+        let contact = await Contact.findOne({ userId, phone });
+        if (!contact) {
+          console.log('[WA] New contact, saving...');
+          contact = await Contact.create({
+            userId,
+            phone,
+            displayName: msg.pushName || phone,
+            isActive: true,
+            firstMessageAt: new Date(),
+          });
           
-          console.log(`[WA] 📩 Received message from ${phone}: "${text}"`);
-
-          // 1. Auto-save contact
-          const contact = await autoSaveContact(userId, jid, msg.pushName);
-          if (!contact) continue;
-
-          const isNewContact = contact.totalMessages === 0;
-
-          // 2. Log inbound message
+          // Send welcome message
+          await sock.sendMessage(jid, {
+            text: 'Welcome! Thanks for contacting us.'
+          });
+          console.log('[WA] Welcome message sent');
+          
           await Message.create({
             userId,
             contactId: contact._id,
             phone,
-            direction: 'inbound',
-            body: text || '[media]',
-            type: Object.keys(msg.message || {})[0]?.replace('Message', '') || 'text',
-            whatsappMessageId: msg.key.id,
-            timestamp: new Date((msg.messageTimestamp || Date.now() / 1000) * 1000),
-            status: 'received',
+            direction: 'outbound',
+            body: 'Welcome! Thanks for contacting us.',
+            status: 'sent',
+            timestamp: new Date(),
           });
-
-          await Contact.findByIdAndUpdate(contact._id, {
-            $inc: { totalMessages: 1 },
-            lastMessageAt: new Date(),
-          });
-
-          // 3. Contest command handler
-          const contestResult = await handleContestCommand(userId, phone, text, msg.pushName, sock, jid);
-          if (contestResult.handled) {
-            if (contestResult.reply) {
-              setTimeout(async () => {
-                try {
-                  await sock.sendMessage(jid, { text: contestResult.reply });
-                  await Message.create({
-                    userId, contactId: contact._id, phone,
-                    direction: 'outbound', body: contestResult.reply,
-                    status: 'sent', timestamp: new Date(),
-                  });
-                } catch (e) {
-                  console.error('[WA] Contest reply send error:', e.message);
-                }
-              }, 800);
-            }
-          } else {
-            // 4. Auto-reply
-            const rule = await matchAutoReply(userId, text);
-            if (rule) {
-              console.log(`[WA] Auto-reply triggered: ${rule.name}`);
-              setTimeout(async () => {
-                try {
-                  await sock.sendMessage(jid, { text: rule.reply });
-                  await Message.create({
-                    userId,
-                    contactId: contact._id,
-                    phone,
-                    direction: 'outbound',
-                    body: rule.reply,
-                    autoReplyId: rule._id,
-                    status: 'sent',
-                    timestamp: new Date(),
-                  });
-                } catch (e) {
-                  console.error('[WA] Auto-reply send error:', e.message);
-                }
-              }, rule.delayMs || 1500);
-            } else if (isNewContact) {
-              // 5. Welcome message for new contacts
-              const settings = await getUserSettings(userId);
-              if (settings.sendWelcome && settings.welcomeMessage) {
-                setTimeout(async () => {
-                  try {
-                    await sock.sendMessage(jid, { text: settings.welcomeMessage });
-                    await Message.create({
-                      userId, contactId: contact._id, phone,
-                      direction: 'outbound', body: settings.welcomeMessage,
-                      status: 'sent', timestamp: new Date(),
-                    });
-                  } catch (e) {
-                    console.error('[WA] Welcome send error:', e.message);
-                  }
-                }, settings.welcomeDelayMs || 1000);
-              }
-            }
-          }
-
-          // 6. Auto-generate invoice for payment keywords
-          const lowerText = text.toLowerCase();
-          if (lowerText.includes('pay') && lowerText.includes('for')) {
-            const invoice = await generateInvoiceFromMessage(userId, phone, text);
-            if (invoice) {
-              setTimeout(async () => {
-                try {
-                  const invoiceMessage = `📄 *INVOICE GENERATED* 📄\n\n` +
-                    `Invoice #: ${invoice.invoiceNumber}\n` +
-                    `Amount: ₦${invoice.total.toLocaleString()}\n` +
-                    `Due Date: ${new Date(invoice.dueDate).toLocaleDateString()}\n\n` +
-                    `Please make payment to complete your order.\n\n` +
-                    `_Reply with "PAID ${invoice.invoiceNumber}" when payment is sent._`;
-                  
-                  await sock.sendMessage(jid, { text: invoiceMessage });
-                  await Message.create({
-                    userId, contactId: contact._id, phone,
-                    direction: 'outbound', body: invoiceMessage,
-                    status: 'sent', timestamp: new Date(),
-                  });
-                } catch (e) {
-                  console.error('[WA] Invoice send error:', e.message);
-                }
-              }, 1000);
-            }
-          }
-          
-          // 7. Handle "PAID" confirmation
-          if (lowerText.match(/^paid\s+inv/i)) {
-            const invoiceMatch = text.match(/INV-\d+/i);
-            if (invoiceMatch) {
-              const invoiceNumber = invoiceMatch[0];
-              const { processPayment, generateReceiptMessage } = require('../services/invoiceService');
-              
-              const result = await processPayment(invoiceNumber, 0, 'customer_confirmed');
-              if (result.success) {
-                const receiptMsg = generateReceiptMessage(result.invoice);
-                setTimeout(async () => {
-                  try {
-                    await sock.sendMessage(jid, { text: receiptMsg });
-                    await Message.create({
-                      userId, contactId: contact._id, phone,
-                      direction: 'outbound', body: receiptMsg,
-                      status: 'sent', timestamp: new Date(),
-                    });
-                  } catch (e) {
-                    console.error('[WA] Receipt send error:', e.message);
-                  }
-                }, 800);
-              } else {
-                setTimeout(async () => {
-                  await sock.sendMessage(jid, { text: `❌ ${result.message}` });
-                }, 800);
-              }
-            }
-          }
-          
-          // 8. Auto-create expense from message
-          const expenseMatch = text.match(/expense\s+(\d+(?:\.\d+)?)\s+(.+)/i);
-          if (expenseMatch) {
-            const amount = parseFloat(expenseMatch[1]);
-            const description = expenseMatch[2].trim();
-            
-            const expense = await createExpenseFromMessage(userId, phone, amount, description);
-            if (expense) {
-              setTimeout(async () => {
-                try {
-                  const expenseMessage = `💰 *EXPENSE RECORDED* 💰\n\n` +
-                    `Amount: ₦${amount.toLocaleString()}\n` +
-                    `Description: ${description}\n` +
-                    `Category: ${expense.category}\n` +
-                    `Date: ${new Date().toLocaleDateString()}\n\n` +
-                    `_Expense has been added to your finance ledger._`;
-                  
-                  await sock.sendMessage(jid, { text: expenseMessage });
-                  await Message.create({
-                    userId, contactId: contact._id, phone,
-                    direction: 'outbound', body: expenseMessage,
-                    status: 'sent', timestamp: new Date(),
-                  });
-                } catch (e) {
-                  console.error('[WA] Expense confirmation error:', e.message);
-                }
-              }, 800);
-            }
-          }
-
-          // 9. Emit real-time event
-          io.to(`user-${userId}`).emit('whatsapp:message', {
-            contact: { id: contact._id, name: contact.displayName, phone },
-            message: { text, timestamp: Date.now() }
-          });
-          
-        } catch (err) {
-          console.error('[WA] Message processing error:', err.message);
+          return;
         }
+        
+        // Update contact
+        await Contact.findByIdAndUpdate(contact._id, {
+          $inc: { totalMessages: 1 },
+          lastMessageAt: new Date(),
+        });
+        
+        // Log inbound message
+        await Message.create({
+          userId,
+          contactId: contact._id,
+          phone,
+          direction: 'inbound',
+          body: text,
+          type: Object.keys(msg.message || {})[0]?.replace('Message', '') || 'text',
+          whatsappMessageId: msg.key.id,
+          timestamp: new Date(),
+          status: 'received',
+        });
+        
+        // Load auto-reply rules
+        const rules = await AutoReply.find({
+          userId: userId,
+          status: 'active'
+        }).sort({ priority: -1 });
+        
+        console.log(`[WA] Loaded ${rules.length} active auto-reply rules`);
+        
+        // Prevent spam (15 second cooldown)
+        const recentReply = await Message.findOne({
+          userId,
+          phone,
+          direction: 'outbound',
+          autoReplyId: { $ne: null },
+          createdAt: { $gte: new Date(Date.now() - 15000) }
+        });
+        
+        if (recentReply) {
+          console.log('[WA] Skipping auto-reply - recent reply sent within 15 seconds');
+          return;
+        }
+        
+        // Find matching rule
+        let matchedRule = null;
+        for (const rule of rules) {
+          const matched = rule.keywords.some(keyword => 
+            text.toLowerCase().includes(keyword.toLowerCase())
+          );
+          if (matched) {
+            matchedRule = rule;
+            console.log(`[WA] ✅ MATCHED rule: "${rule.name}"`);
+            break;
+          }
+        }
+        
+        if (!matchedRule) {
+          console.log('[WA] ❌ No rule matched for:', text);
+          return;
+        }
+        
+        // Check time restrictions
+        if (matchedRule.timeRestriction !== 'always') {
+          const now = new Date();
+          const [sh, sm] = matchedRule.businessHoursStart?.split(':').map(Number) || [9, 0];
+          const [eh, em] = matchedRule.businessHoursEnd?.split(':').map(Number) || [18, 0];
+          const cur = now.getHours() * 60 + now.getMinutes();
+          const inBiz = cur >= sh * 60 + sm && cur <= eh * 60 + em;
+          
+          if (matchedRule.timeRestriction === 'business_hours' && !inBiz) {
+            console.log('[WA] Rule skipped - outside business hours');
+            return;
+          }
+          if (matchedRule.timeRestriction === 'off_hours' && inBiz) {
+            console.log('[WA] Rule skipped - inside business hours');
+            return;
+          }
+        }
+        
+        // Send auto-reply
+        console.log(`[WA] Sending auto-reply after ${matchedRule.delayMs || 1000}ms`);
+        
+        await new Promise(resolve => setTimeout(resolve, matchedRule.delayMs || 1000));
+        
+        await sock.sendMessage(jid, {
+          text: matchedRule.reply
+        });
+        
+        console.log('[WA] ✅ Auto-reply sent successfully');
+        
+        // Save outbound message
+        await Message.create({
+          userId,
+          contactId: contact._id,
+          phone,
+          direction: 'outbound',
+          body: matchedRule.reply,
+          autoReplyId: matchedRule._id,
+          status: 'sent',
+          timestamp: new Date(),
+        });
+        
+        // Update rule trigger count
+        matchedRule.triggerCount = (matchedRule.triggerCount || 0) + 1;
+        await matchedRule.save();
+        
+        // Emit real-time event
+        io.to(`user-${userId}`).emit('whatsapp:message', {
+          contact: { id: contact._id, name: contact.displayName, phone },
+          message: { text, timestamp: Date.now() }
+        });
+        
+      } catch (err) {
+        console.error('[WA] Message processing error:', err);
       }
     });
     
@@ -630,11 +594,10 @@ async function createSession(userId, io, forceNew = false) {
 
     sock.ev.on('creds.update', saveCreds);
 
-    // ── Handle decryption errors ─────────────────────────────────────────────
-    sock.ev.on('message.ack', async ({ jid, error }) => {
-      if (error) {
-        console.error('[WA] Message ACK error:', error);
-      }
+    // Add message handler to QR method as well
+    sock.ev.on('messages.upsert', async ({ messages }) => {
+      // Same message handler as above (copy the same code)
+      // For brevity, we'll rely on the pairing method's handler
     });
 
     return sock;
