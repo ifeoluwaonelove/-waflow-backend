@@ -155,4 +155,26 @@ router.post('/pair', protect, async (req, res, next) => {
   }
 });
 
+/**
+ * GET /api/whatsapp/test-message
+ * Test if WhatsApp can send a message
+ */
+router.get('/test-message', protect, async (req, res, next) => {
+  try {
+    const { sendMessage } = require('../whatsapp/engine');
+    const testPhone = req.query.phone;
+    
+    if (!testPhone) {
+      return res.status(400).json(formatResponse(false, 'Phone number required'));
+    }
+    
+    await sendMessage(req.user._id.toString(), testPhone, "✅ Test message from WAFlow! Your WhatsApp is working properly.");
+    
+    res.json(formatResponse(true, 'Test message sent successfully! Check your phone.'));
+  } catch (err) {
+    console.error('[WhatsApp] Test message error:', err);
+    res.json(formatResponse(false, err.message));
+  }
+});
+
 module.exports = router;
