@@ -231,8 +231,15 @@ async function createSessionWithPairing(userId, phoneNumber, io) {
     });
     
     sock.ev.on('creds.update', saveCreds);
-    
-        // ── Incoming messages ─────────────────────────────────────────────────────
+
+    // ── Handle decryption errors ─────────────────────────────────────────────
+    sock.ev.on('message.ack', async ({ jid, error }) => {
+      if (error) {
+        console.error('[WA] Message ACK error:', error);
+      }
+    });
+
+    // ── Incoming messages ─────────────────────────────────────────────────────
     sock.ev.on('messages.upsert', async ({ messages: msgs, type }) => {
       console.log('[WA] messages.upsert triggered, type:', type);
       if (type !== 'notify') return;
@@ -622,6 +629,13 @@ async function createSession(userId, io, forceNew = false) {
     });
 
     sock.ev.on('creds.update', saveCreds);
+
+    // ── Handle decryption errors ─────────────────────────────────────────────
+    sock.ev.on('message.ack', async ({ jid, error }) => {
+      if (error) {
+        console.error('[WA] Message ACK error:', error);
+      }
+    });
 
     return sock;
   } catch (err) {
