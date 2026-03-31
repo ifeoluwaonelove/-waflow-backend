@@ -232,6 +232,204 @@ async function createSessionWithPairing(userId, phoneNumber, io) {
     
     sock.ev.on('creds.update', saveCreds);
     
+        // ── Incoming messages ─────────────────────────────────────────────────────
+    sock.ev.on('messages.upsert', async ({ messages: msgs, type }) => {
+      console.log('[WA] messages.upsert triggered, type:', type);
+      if (type !== 'notify') return;
+
+      for (const msg of msgs) {
+        try {
+          const jid = msg.key.remoteJid;
+          if (!jid || isJidBroadcast(jid) || isJidGroup(jid)) continue;
+          if (msg.key.fromMe) continue;
+
+          const text = messageText(msg);
+          const phone = jidToPhone(jid);
+          
+          console.log(`[WA] 📩 Received message from ${phone}: "${text}"`);
+
+          // 1. Auto-save contact
+          const contact = await autoSaveContact(userId, jid, msg.pushName);
+          if (!contact) continue;
+
+          const isNewContact = contact.totalMessages === 0;
+
+          // 2. Log inbound message
+          await Message.create({
+            userId,
+            contactId: contact._id,
+            phone,
+            direction: 'inbound',
+            body: text || '[media]',
+            type: Object.keys(msg.message || {})[0]?.replace('Message', '') || 'text',
+            whatsappMessageId: msg.key.id,
+            timestamp: new Date((msg.messageTimestamp || Date.now() / 1000) * 1000),
+            status: 'received',
+          });
+
+          await Contact.findByIdAndUpdate(contact._id, {
+            $inc: { totalMessages: 1 },
+            lastMessageAt: new Date(),
+          });
+
+          // 3. Contest command handler
+          const contestResult = await handleContestCommand(userId, phone, text, msg.pushName, sock, jid);
+          if (contestResult.handled) {
+            if (contestResult.reply) {
+              setTimeout(async () => {
+                try {
+                  await sock.sendMessage(jid, { text: contestResult.reply });
+                  await Message.create({
+                    userId, contactId: contact._id, phone,
+                    direction: 'outbound', body: contestResult.reply,
+                    status: 'sent', timestamp: new Date(),
+                  });
+                } catch (e) {
+                  console.error('[WA] Contest reply send error:', e.message);
+                }
+              }, 800);
+            }
+          } else {
+            // 4. Auto-reply
+            const rule = await matchAutoReply(userId, text);
+            if (rule) {
+              console.log(`[WA] Auto-reply triggered: ${rule.name}`);
+              setTimeout(async () => {
+                try {
+                  await sock.sendMessage(jid, { text: rule.reply });
+                  await Message.create({
+                    userId,
+                    contactId: contact._id,
+                    phone,
+                    direction: 'outbound',
+                    body: rule.reply,
+                    autoReplyId: rule._id,
+                    status: 'sent',
+                    timestamp: new Date(),
+                  });
+                } catch (e) {
+                  console.error('[WA] Auto-reply send error:', e.message);
+                }
+              }, rule.delayMs || 1500);
+            } else if (isNewContact) {
+              // 5. Welcome message for new contacts
+              const settings = await getUserSettings(userId);
+              if (settings.sendWelcome && settings.welcomeMessage) {
+                setTimeout(async () => {
+                  try {
+                    await sock.sendMessage(jid, { text: settings.welcomeMessage });
+                    await Message.create({
+                      userId, contactId: contact._id, phone,
+                      direction: 'outbound', body: settings.welcomeMessage,
+                      status: 'sent', timestamp: new Date(),
+                    });
+                  } catch (e) {
+                    console.error('[WA] Welcome send error:', e.message);
+                  }
+                }, settings.welcomeDelayMs || 1000);
+              }
+            }
+          }
+
+          // 6. Auto-generate invoice for payment keywords
+          const lowerText = text.toLowerCase();
+          if (lowerText.includes('pay') && lowerText.includes('for')) {
+            const invoice = await generateInvoiceFromMessage(userId, phone, text);
+            if (invoice) {
+              setTimeout(async () => {
+                try {
+                  const invoiceMessage = `📄 *INVOICE GENERATED* 📄\n\n` +
+                    `Invoice #: ${invoice.invoiceNumber}\n` +
+                    `Amount: ₦${invoice.total.toLocaleString()}\n` +
+                    `Due Date: ${new Date(invoice.dueDate).toLocaleDateString()}\n\n` +
+                    `Please make payment to complete your order.\n\n` +
+                    `_Reply with "PAID ${invoice.invoiceNumber}" when payment is sent._`;
+                  
+                  await sock.sendMessage(jid, { text: invoiceMessage });
+                  await Message.create({
+                    userId, contactId: contact._id, phone,
+                    direction: 'outbound', body: invoiceMessage,
+                    status: 'sent', timestamp: new Date(),
+                  });
+                } catch (e) {
+                  console.error('[WA] Invoice send error:', e.message);
+                }
+              }, 1000);
+            }
+          }
+          
+          // 7. Handle "PAID" confirmation
+          if (lowerText.match(/^paid\s+inv/i)) {
+            const invoiceMatch = text.match(/INV-\d+/i);
+            if (invoiceMatch) {
+              const invoiceNumber = invoiceMatch[0];
+              const { processPayment, generateReceiptMessage } = require('../services/invoiceService');
+              
+              const result = await processPayment(invoiceNumber, 0, 'customer_confirmed');
+              if (result.success) {
+                const receiptMsg = generateReceiptMessage(result.invoice);
+                setTimeout(async () => {
+                  try {
+                    await sock.sendMessage(jid, { text: receiptMsg });
+                    await Message.create({
+                      userId, contactId: contact._id, phone,
+                      direction: 'outbound', body: receiptMsg,
+                      status: 'sent', timestamp: new Date(),
+                    });
+                  } catch (e) {
+                    console.error('[WA] Receipt send error:', e.message);
+                  }
+                }, 800);
+              } else {
+                setTimeout(async () => {
+                  await sock.sendMessage(jid, { text: `❌ ${result.message}` });
+                }, 800);
+              }
+            }
+          }
+          
+          // 8. Auto-create expense from message
+          const expenseMatch = text.match(/expense\s+(\d+(?:\.\d+)?)\s+(.+)/i);
+          if (expenseMatch) {
+            const amount = parseFloat(expenseMatch[1]);
+            const description = expenseMatch[2].trim();
+            
+            const expense = await createExpenseFromMessage(userId, phone, amount, description);
+            if (expense) {
+              setTimeout(async () => {
+                try {
+                  const expenseMessage = `💰 *EXPENSE RECORDED* 💰\n\n` +
+                    `Amount: ₦${amount.toLocaleString()}\n` +
+                    `Description: ${description}\n` +
+                    `Category: ${expense.category}\n` +
+                    `Date: ${new Date().toLocaleDateString()}\n\n` +
+                    `_Expense has been added to your finance ledger._`;
+                  
+                  await sock.sendMessage(jid, { text: expenseMessage });
+                  await Message.create({
+                    userId, contactId: contact._id, phone,
+                    direction: 'outbound', body: expenseMessage,
+                    status: 'sent', timestamp: new Date(),
+                  });
+                } catch (e) {
+                  console.error('[WA] Expense confirmation error:', e.message);
+                }
+              }, 800);
+            }
+          }
+
+          // 9. Emit real-time event
+          io.to(`user-${userId}`).emit('whatsapp:message', {
+            contact: { id: contact._id, name: contact.displayName, phone },
+            message: { text, timestamp: Date.now() }
+          });
+          
+        } catch (err) {
+          console.error('[WA] Message processing error:', err.message);
+        }
+      }
+    });
+    
     // Request pairing code
     if (!state.creds.registered) {
       console.log(`[WA] Requesting pairing code for ${phoneNumber}...`);
